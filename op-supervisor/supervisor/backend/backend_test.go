@@ -52,6 +52,104 @@ func fullConfigSet(t *testing.T, size int) depset.FullConfigSetMerged {
 	return fullCfgSet
 }
 
+func TestWrongScopeBump(t *testing.T) {
+	logger := testlog.Logger(t, log.LvlInfo)
+	m := metrics.NoopMetrics
+	dataDir := t.TempDir()
+	chainA := eth.ChainIDFromUInt64(testChainIDOffset)
+	chainB := eth.ChainIDFromUInt64(testChainIDOffset + 1)
+	fullCfgSet := fullConfigSet(t, 2)
+	rollupCfgSet := fullCfgSet.RollupConfigSet.(depset.StaticRollupConfigSet)
+
+	anchor := eth.BlockRef{
+		Hash:       common.Hash{0xff},
+		Number:     0,
+		ParentHash: common.Hash{}, // genesis has no parent hash
+		Time:       10000,
+	}
+
+	rollupCfgSet[chainA].Genesis = depset.Genesis{
+		L2: types.BlockSealFromRef(anchor),
+	}
+	rollupCfgSet[chainB].Genesis = depset.Genesis{
+		L2: types.BlockSealFromRef(anchor),
+	}
+
+	cfg := &config.Config{
+		Version:               "test",
+		FullConfigSetSource:   fullCfgSet,
+		SynchronousProcessors: true,
+		MockRun:               false,
+		SyncSources:           &syncnode.CLISyncNodes{},
+		Datadir:               dataDir,
+	}
+
+	ex := event.NewGlobalSynchronous(context.Background())
+	b, err := NewSupervisorBackend(context.Background(), logger, m, cfg, ex)
+	require.NoError(t, err)
+	t.Log("initialized!")
+
+	err = b.Start(context.Background())
+	require.NoError(t, err)
+	t.Log("started!")
+
+	l1Src := &testutils.MockL1Source{}
+	b.AttachL1Source(l1Src)
+	src := &MockProcessorSource{}
+
+	//
+	// Chain A
+	//
+	blockA1 := eth.BlockRef{
+		Hash:       common.Hash{0xaa},
+		Number:     anchor.Number + 1,
+		ParentHash: anchor.Hash,
+		Time:       anchor.Time + 2,
+	}
+
+	require.NoError(t, b.AttachProcessorSource(chainA, src))
+	require.NoError(t, ex.Drain())
+	_, err = b.CrossUnsafe(context.Background(), chainA)
+	require.NoError(t, err)
+	_, err = b.CrossSafe(context.Background(), chainA)
+	require.NoError(t, err)
+
+	src.ExpectBlockRefByNumber(1, blockA1, nil)
+	src.ExpectFetchReceipts(blockA1.Hash, nil, nil)
+	b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
+		ChainID:        chainA,
+		NewLocalUnsafe: blockA1,
+	})
+	require.NoError(t, ex.Drain())
+
+	//
+	// Chain B
+	//
+	blockB1 := eth.BlockRef{
+		Hash:       common.Hash{0xaa},
+		Number:     anchor.Number + 1,
+		ParentHash: anchor.Hash,
+		Time:       anchor.Time + 2,
+	}
+
+	require.NoError(t, b.AttachProcessorSource(chainB, src))
+	src.ExpectBlockRefByNumber(1, blockB1, nil)
+	src.ExpectFetchReceipts(blockB1.Hash, nil, nil)
+	_, err = b.CrossUnsafe(context.Background(), chainB)
+	require.NoError(t, err)
+	_, err = b.CrossSafe(context.Background(), chainB)
+	require.NoError(t, err)
+	b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
+		ChainID:        chainB,
+		NewLocalUnsafe: blockB1,
+	})
+	require.NoError(t, ex.Drain())
+
+	err = b.Stop(context.Background())
+	require.NoError(t, err)
+	t.Log("stopped!")
+}
+
 func TestBackendLifetime_InteropAtGenesis(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	m := metrics.NoopMetrics
