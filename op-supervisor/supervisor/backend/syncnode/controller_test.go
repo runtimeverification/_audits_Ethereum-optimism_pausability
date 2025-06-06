@@ -2,6 +2,7 @@ package syncnode
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,10 +22,12 @@ type mockSyncControl struct {
 	anchorPointFn       func(ctx context.Context) (types.DerivedBlockRefPair, error)
 	provideL1Fn         func(ctx context.Context, ref eth.BlockRef) error
 	resetFn             func(ctx context.Context, unsafe, safe, finalized eth.BlockID) error
+	resetPreInteropFn   func(ctx context.Context) error
 	updateCrossSafeFn   func(ctx context.Context, derived, source eth.BlockID) error
 	updateCrossUnsafeFn func(ctx context.Context, derived eth.BlockID) error
 	updateFinalizedFn   func(ctx context.Context, id eth.BlockID) error
 	pullEventFn         func(ctx context.Context) (*types.ManagedEvent, error)
+	blockRefByNumFn     func(ctx context.Context, number uint64) (eth.BlockRef, error)
 
 	subscribeEvents gethevent.FeedOf[*types.ManagedEvent]
 }
@@ -47,9 +50,16 @@ func (m *mockSyncControl) ProvideL1(ctx context.Context, ref eth.BlockRef) error
 	return nil
 }
 
-func (m *mockSyncControl) Reset(ctx context.Context, unsafe, safe, finalized eth.BlockID) error {
+func (m *mockSyncControl) Reset(ctx context.Context, lUnsafe, xUnsafe, lSafe, xSafe, finalized eth.BlockID) error {
 	if m.resetFn != nil {
-		return m.resetFn(ctx, unsafe, safe, finalized)
+		return m.resetFn(ctx, lUnsafe, lSafe, finalized)
+	}
+	return nil
+}
+
+func (m *mockSyncControl) ResetPreInterop(ctx context.Context) error {
+	if m.resetPreInteropFn != nil {
+		return m.resetPreInteropFn(ctx)
 	}
 	return nil
 }
@@ -86,17 +96,52 @@ func (m *mockSyncControl) UpdateFinalized(ctx context.Context, id eth.BlockID) e
 	return nil
 }
 
+func (m *mockSyncControl) BlockRefByNumber(ctx context.Context, number uint64) (eth.BlockRef, error) {
+	if m.blockRefByNumFn != nil {
+		return m.blockRefByNumFn(ctx, number)
+	}
+	return eth.BlockRef{}, nil
+}
+
 func (m *mockSyncControl) String() string {
 	return "mock"
+}
+
+func (m *mockSyncControl) ReconnectRPC(ctx context.Context) error {
+	return nil
 }
 
 var _ SyncControl = (*mockSyncControl)(nil)
 
 type mockBackend struct {
-	safeDerivedAtFn func(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (eth.BlockID, error)
+	anchorPointFn     func(ctx context.Context, chainID eth.ChainID) (types.DerivedBlockSealPair, error)
+	localSafeFn       func(ctx context.Context, chainID eth.ChainID) (pair types.DerivedIDPair, err error)
+	finalizedFn       func(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error)
+	safeDerivedAtFn   func(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (eth.BlockID, error)
+	findSealedBlockFn func(ctx context.Context, chainID eth.ChainID, num uint64) (eth.BlockID, error)
+	isLocalSafeFn     func(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error
+	isCrossSafeFn     func(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error
+	isLocalUnsafeFn   func(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error
+}
+
+func (m *mockBackend) ActivationBlock(ctx context.Context, chainID eth.ChainID) (types.DerivedBlockSealPair, error) {
+	if m.anchorPointFn != nil {
+		return m.anchorPointFn(ctx, chainID)
+	}
+	return types.DerivedBlockSealPair{}, errors.New("not implemented")
+}
+
+func (m *mockBackend) FindSealedBlock(ctx context.Context, chainID eth.ChainID, num uint64) (eth.BlockID, error) {
+	if m.findSealedBlockFn != nil {
+		return m.findSealedBlockFn(ctx, chainID, num)
+	}
+	return eth.BlockID{}, nil
 }
 
 func (m *mockBackend) LocalSafe(ctx context.Context, chainID eth.ChainID) (pair types.DerivedIDPair, err error) {
+	if m.localSafeFn != nil {
+		return m.localSafeFn(ctx, chainID)
+	}
 	return types.DerivedIDPair{}, nil
 }
 
@@ -108,7 +153,28 @@ func (m *mockBackend) LocalUnsafe(ctx context.Context, chainID eth.ChainID) (eth
 	return eth.BlockID{}, nil
 }
 
-func (m *mockBackend) SafeDerivedAt(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (derived eth.BlockID, err error) {
+func (m *mockBackend) IsLocalSafe(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error {
+	if m.isLocalSafeFn != nil {
+		return m.isLocalSafeFn(ctx, chainID, blockID)
+	}
+	return nil
+}
+
+func (m *mockBackend) IsCrossSafe(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error {
+	if m.isCrossSafeFn != nil {
+		return m.isCrossSafeFn(ctx, chainID, blockID)
+	}
+	return nil
+}
+
+func (m *mockBackend) IsLocalUnsafe(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error {
+	if m.isLocalUnsafeFn != nil {
+		return m.isLocalUnsafeFn(ctx, chainID, blockID)
+	}
+	return nil
+}
+
+func (m *mockBackend) LocalSafeDerivedAt(ctx context.Context, chainID eth.ChainID, source eth.BlockID) (derived eth.BlockID, err error) {
 	if m.safeDerivedAtFn != nil {
 		return m.safeDerivedAtFn(ctx, chainID, source)
 	}
@@ -116,6 +182,9 @@ func (m *mockBackend) SafeDerivedAt(ctx context.Context, chainID eth.ChainID, so
 }
 
 func (m *mockBackend) Finalized(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error) {
+	if m.finalizedFn != nil {
+		return m.finalizedFn(ctx, chainID)
+	}
 	return eth.BlockID{}, nil
 }
 
@@ -123,28 +192,23 @@ func (m *mockBackend) L1BlockRefByNumber(ctx context.Context, number uint64) (et
 	return eth.L1BlockRef{}, nil
 }
 
+func (m *mockBackend) CrossUnsafe(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error) {
+	return eth.BlockID{}, nil
+}
+
 var _ backend = (*mockBackend)(nil)
 
 func sampleDepSet(t *testing.T) depset.DependencySet {
 	depSet, err := depset.NewStaticConfigDependencySet(
 		map[eth.ChainID]*depset.StaticConfigDependency{
-			eth.ChainIDFromUInt64(900): {
-				ChainIndex:     900,
-				ActivationTime: 42,
-				HistoryMinTime: 100,
-			},
-			eth.ChainIDFromUInt64(901): {
-				ChainIndex:     901,
-				ActivationTime: 30,
-				HistoryMinTime: 20,
-			},
+			eth.ChainIDFromUInt64(900): {},
+			eth.ChainIDFromUInt64(901): {},
 		})
 	require.NoError(t, err)
 	return depSet
 }
 
 type eventMonitor struct {
-	anchorCalled             int
 	localDerived             int
 	receivedLocalUnsafe      int
 	localDerivedOriginUpdate int
@@ -152,8 +216,6 @@ type eventMonitor struct {
 
 func (m *eventMonitor) OnEvent(ev event.Event) bool {
 	switch ev.(type) {
-	case superevents.AnchorEvent:
-		m.anchorCalled += 1
 	case superevents.LocalDerivedEvent:
 		m.localDerived += 1
 	case superevents.LocalUnsafeReceivedEvent:
@@ -174,7 +236,7 @@ func TestAttachNodeController(t *testing.T) {
 	ex := event.NewGlobalSynchronous(context.Background())
 	eventSys := event.NewSystem(logger, ex)
 	controller := NewSyncNodesController(logger, depSet, eventSys, &mockBackend{})
-	eventSys.Register("controller", controller, event.DefaultRegisterOpts())
+	eventSys.Register("controller", controller)
 	require.Zero(t, controller.controllers.Len(), "controllers should be empty to start")
 
 	// Attach a controller for chain 900

@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/interop/managed"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop/standard"
+	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 )
 
 type SubSystem interface {
@@ -19,7 +19,6 @@ type SubSystem interface {
 }
 
 var _ SubSystem = (*managed.ManagedMode)(nil)
-var _ SubSystem = (*standard.StandardMode)(nil)
 
 type L1Source interface {
 	managed.L1Source
@@ -30,6 +29,6 @@ type L2Source interface {
 }
 
 type Setup interface {
-	Setup(ctx context.Context, logger log.Logger, rollupCfg *rollup.Config, l1 L1Source, l2 L2Source) (SubSystem, error)
+	Setup(ctx context.Context, logger log.Logger, rollupCfg *rollup.Config, l1 L1Source, l2 L2Source, m opmetrics.RPCMetricer) (SubSystem, error)
 	Check() error
 }

@@ -2,7 +2,6 @@ package driver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	gosync "sync"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
+	"github.com/ethereum-optimism/optimism/op-node/p2p"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/clsync"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
@@ -33,7 +33,7 @@ type Driver struct {
 	sched *StepSchedulingDeriver
 
 	emitter event.Emitter
-	drain   func() error
+	drain   Drain
 
 	// Requests to block the event loop for synchronous execution to avoid reading an inconsistent state
 	stateReq chan chan struct{}
@@ -46,25 +46,10 @@ type Driver struct {
 	// May not be modified after starting the Driver.
 	driverConfig *Config
 
-	// L1 Signals:
-	//
-	// Not all L1 blocks, or all changes, have to be signalled:
-	// the derivation process traverses the chain and handles reorgs as necessary,
-	// the driver just needs to be aware of the *latest* signals enough so to not
-	// lag behind actionable data.
-	l1HeadSig      chan eth.L1BlockRef
-	l1SafeSig      chan eth.L1BlockRef
-	l1FinalizedSig chan eth.L1BlockRef
-
 	// Interface to signal the L2 block range to sync.
 	altSync AltSync
 
-	// L2 Signals:
-
-	unsafeL2Payloads chan *eth.ExecutionPayloadEnvelope
-
 	sequencer sequencing.SequencerIface
-	network   Network // may be nil, network for is optional
 
 	metrics Metrics
 	log     log.Logger
@@ -79,8 +64,12 @@ type Driver struct {
 // The loop will have been started iff err is not nil.
 func (s *Driver) Start() error {
 	log.Info("Starting driver", "sequencerEnabled", s.driverConfig.SequencerEnabled,
-		"sequencerStopped", s.driverConfig.SequencerStopped)
+		"sequencerStopped", s.driverConfig.SequencerStopped, "recoverMode", s.driverConfig.RecoverMode)
 	if s.driverConfig.SequencerEnabled {
+		if s.driverConfig.RecoverMode {
+			log.Warn("sequencer is in recover mode")
+			s.sequencer.SetRecoverMode(true)
+		}
 		if err := s.sequencer.SetMaxSafeLag(s.driverCtx, s.driverConfig.SequencerMaxSafeLag); err != nil {
 			return fmt.Errorf("failed to set sequencer max safe lag: %w", err)
 		}
@@ -100,46 +89,6 @@ func (s *Driver) Close() error {
 	s.wg.Wait()
 	s.sequencer.Close()
 	return nil
-}
-
-// OnL1Head signals the driver that the L1 chain changed the "unsafe" block,
-// also known as head of the chain, or "latest".
-func (s *Driver) OnL1Head(ctx context.Context, unsafe eth.L1BlockRef) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case s.l1HeadSig <- unsafe:
-		return nil
-	}
-}
-
-// OnL1Safe signals the driver that the L1 chain changed the "safe",
-// also known as the justified checkpoint (as seen on L1 beacon-chain).
-func (s *Driver) OnL1Safe(ctx context.Context, safe eth.L1BlockRef) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case s.l1SafeSig <- safe:
-		return nil
-	}
-}
-
-func (s *Driver) OnL1Finalized(ctx context.Context, finalized eth.L1BlockRef) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case s.l1FinalizedSig <- finalized:
-		return nil
-	}
-}
-
-func (s *Driver) OnUnsafeL2Payload(ctx context.Context, envelope *eth.ExecutionPayloadEnvelope) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case s.unsafeL2Payloads <- envelope:
-		return nil
-	}
 }
 
 // the eventLoop responds to L1 changes and internal timers to produce L2 blocks.
@@ -201,17 +150,6 @@ func (s *Driver) eventLoop() {
 			return
 		}
 
-		if s.drain != nil {
-			// While event-processing is synchronous we have to drain
-			// (i.e. process all queued-up events) before creating any new events.
-			if err := s.drain(); err != nil {
-				if s.driverCtx.Err() != nil {
-					return
-				}
-				s.log.Error("unexpected error from event-draining", "err", err)
-			}
-		}
-
 		planSequencerAction()
 
 		// If the engine is not ready, or if the L2 head is actively changing, then reset the alt-sync:
@@ -232,36 +170,6 @@ func (s *Driver) eventLoop() {
 			if err != nil {
 				s.log.Warn("failed to check for unsafe L2 blocks to sync", "err", err)
 			}
-		case envelope := <-s.unsafeL2Payloads:
-			// If we are doing CL sync or done with engine syncing, fallback to the unsafe payload queue & CL P2P sync.
-			if s.SyncCfg.SyncMode == sync.CLSync || !s.Engine.IsEngineSyncing() {
-				s.log.Info("Optimistically queueing unsafe L2 execution payload", "id", envelope.ExecutionPayload.ID())
-				s.Emitter.Emit(clsync.ReceivedUnsafePayloadEvent{Envelope: envelope})
-				s.metrics.RecordReceivedUnsafePayload(envelope)
-				reqStep()
-			} else if s.SyncCfg.SyncMode == sync.ELSync {
-				ref, err := derive.PayloadToBlockRef(s.Config, envelope.ExecutionPayload)
-				if err != nil {
-					s.log.Info("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
-					continue
-				}
-				if ref.Number <= s.Engine.UnsafeL2Head().Number {
-					continue
-				}
-				s.log.Info("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
-				if err := s.Engine.InsertUnsafePayload(s.driverCtx, envelope, ref); err != nil {
-					s.log.Warn("Failed to insert unsafe payload for EL sync", "id", envelope.ExecutionPayload.ID(), "err", err)
-				}
-			}
-		case newL1Head := <-s.l1HeadSig:
-			s.Emitter.Emit(status.L1UnsafeEvent{L1Unsafe: newL1Head})
-			reqStep() // a new L1 head may mean we have the data to not get an EOF again.
-		case newL1Safe := <-s.l1SafeSig:
-			s.Emitter.Emit(status.L1SafeEvent{L1Safe: newL1Safe})
-			// no step, justified L1 information does not do anything for L2 derivation or status
-		case newL1Finalized := <-s.l1FinalizedSig:
-			s.emitter.Emit(finality.FinalizeL1Event{FinalizedL1: newL1Finalized})
-			reqStep() // we may be able to mark more L2 data as finalized now
 		case <-s.sched.NextDelayedStep():
 			s.emitter.Emit(StepAttemptEvent{})
 		case <-s.sched.NextStep():
@@ -273,6 +181,15 @@ func (s *Driver) eventLoop() {
 			s.Derivation.Reset()
 			s.metrics.RecordPipelineReset()
 			close(respCh)
+		case <-s.drain.Await():
+			if err := s.drain.Drain(); err != nil {
+				if s.driverCtx.Err() != nil {
+					return
+				} else {
+					s.log.Error("unexpected error from event-draining", "err", err)
+					s.Emitter.Emit(rollup.CriticalErrorEvent{Err: fmt.Errorf("unexpected error: %w", err)})
+				}
+			}
 		case <-s.driverCtx.Done():
 			return
 		}
@@ -306,8 +223,6 @@ type SyncDeriver struct {
 
 	Ctx context.Context
 
-	Drain func() error
-
 	// When in interop, and managed by an op-supervisor,
 	// the node performs a reset based on the instructions of the op-supervisor.
 	ManagedMode bool
@@ -319,6 +234,15 @@ func (s *SyncDeriver) AttachEmitter(em event.Emitter) {
 
 func (s *SyncDeriver) OnEvent(ev event.Event) bool {
 	switch x := ev.(type) {
+	case status.L1UnsafeEvent:
+		// a new L1 head may mean we have the data to not get an EOF again.
+		s.Emitter.Emit(StepReqEvent{})
+	case finality.FinalizeL1Event:
+		// On "safe" L1 blocks: no step, justified L1 information does not do anything for L2 derivation or status.
+		// On "finalized" L1 blocks: we may be able to mark more L2 data as finalized now.
+		s.Emitter.Emit(StepReqEvent{})
+	case p2p.ReceivedBlockEvent:
+		s.onIncomingP2PBlock(x.Envelope)
 	case StepEvent:
 		s.SyncStep()
 	case rollup.ResetEvent:
@@ -351,6 +275,28 @@ func (s *SyncDeriver) OnEvent(ev event.Event) bool {
 	return true
 }
 
+func (s *SyncDeriver) onIncomingP2PBlock(envelope *eth.ExecutionPayloadEnvelope) {
+	// If we are doing CL sync or done with engine syncing, fallback to the unsafe payload queue & CL P2P sync.
+	if s.SyncCfg.SyncMode == sync.CLSync || !s.Engine.IsEngineSyncing() {
+		s.Log.Info("Optimistically queueing unsafe L2 execution payload", "id", envelope.ExecutionPayload.ID())
+		s.Emitter.Emit(clsync.ReceivedUnsafePayloadEvent{Envelope: envelope})
+		s.Emitter.Emit(StepReqEvent{})
+	} else if s.SyncCfg.SyncMode == sync.ELSync {
+		ref, err := derive.PayloadToBlockRef(s.Config, envelope.ExecutionPayload)
+		if err != nil {
+			s.Log.Info("Failed to turn execution payload into a block ref", "id", envelope.ExecutionPayload.ID(), "err", err)
+			return
+		}
+		if ref.Number <= s.Engine.UnsafeL2Head().Number {
+			return
+		}
+		s.Log.Info("Optimistically inserting unsafe L2 execution payload to drive EL sync", "id", envelope.ExecutionPayload.ID())
+		if err := s.Engine.InsertUnsafePayload(s.Ctx, envelope, ref); err != nil {
+			s.Log.Warn("Failed to insert unsafe payload for EL sync", "id", envelope.ExecutionPayload.ID(), "err", err)
+		}
+	}
+}
+
 func (s *SyncDeriver) onSafeDerivedBlock(x engine.SafeDerivedEvent) {
 	if s.SafeHeadNotifs != nil && s.SafeHeadNotifs.Enabled() {
 		if err := s.SafeHeadNotifs.SafeHeadUpdated(x.Safe, x.Source.ID()); err != nil {
@@ -367,11 +313,11 @@ func (s *SyncDeriver) onEngineConfirmedReset(x engine.EngineResetConfirmedEvent)
 	// and don't confirm the engine-reset with the derivation pipeline.
 	// The pipeline will re-trigger a reset as necessary.
 	if s.SafeHeadNotifs != nil {
-		if err := s.SafeHeadNotifs.SafeHeadReset(x.Safe); err != nil {
-			s.Log.Error("Failed to warn safe-head notifier of safe-head reset", "safe", x.Safe)
+		if err := s.SafeHeadNotifs.SafeHeadReset(x.CrossSafe); err != nil {
+			s.Log.Error("Failed to warn safe-head notifier of safe-head reset", "safe", x.CrossSafe)
 			return
 		}
-		if s.SafeHeadNotifs.Enabled() && x.Safe.ID() == s.Config.Genesis.L2 {
+		if s.SafeHeadNotifs.Enabled() && x.CrossSafe.ID() == s.Config.Genesis.L2 {
 			// The rollup genesis block is always safe by definition. So if the pipeline resets this far back we know
 			// we will process all safe head updates and can record genesis as always safe from L1 genesis.
 			// Note that it is not safe to use cfg.Genesis.L1 here as it is the block immediately before the L2 genesis
@@ -382,23 +328,20 @@ func (s *SyncDeriver) onEngineConfirmedReset(x engine.EngineResetConfirmedEvent)
 				s.Log.Error("Failed to retrieve L1 genesis, cannot notify genesis as safe block", "err", err)
 				return
 			}
-			if err := s.SafeHeadNotifs.SafeHeadUpdated(x.Safe, l1Genesis.ID()); err != nil {
+			if err := s.SafeHeadNotifs.SafeHeadUpdated(x.CrossSafe, l1Genesis.ID()); err != nil {
 				s.Log.Error("Failed to notify safe-head listener of safe-head", "err", err)
 				return
 			}
 		}
 	}
+	s.Log.Info("Confirming pipeline reset")
 	s.Emitter.Emit(derive.ConfirmPipelineResetEvent{})
 }
 
 func (s *SyncDeriver) onResetEvent(x rollup.ResetEvent) {
 	if s.ManagedMode {
-		if errors.Is(x.Err, derive.ErrEngineResetReq) {
-			s.Log.Warn("Managed Mode is enabled, but engine reset is required", "err", x.Err)
-			s.Emitter.Emit(engine.ResetEngineRequestEvent{})
-		} else {
-			s.Log.Warn("Encountered reset, waiting for op-supervisor to recover", "err", x.Err)
-		}
+		s.Log.Warn("Encountered reset in Managed Mode, waiting for op-supervisor", "err", x.Err)
+		// ManagedMode will pick up the ResetEvent
 		return
 	}
 	// If the system corrupts, e.g. due to a reorg, simply reset it
@@ -412,32 +355,9 @@ func (s *SyncDeriver) onResetEvent(x rollup.ResetEvent) {
 func (s *SyncDeriver) SyncStep() {
 	s.Log.Debug("Sync process step")
 
-	drain := func() (ok bool) {
-		if err := s.Drain(); err != nil {
-			if errors.Is(err, context.Canceled) {
-				return false
-			} else {
-				s.Emitter.Emit(rollup.CriticalErrorEvent{
-					Err: fmt.Errorf("unexpected error on SyncStep event Drain: %w", err)})
-				return false
-			}
-		}
-		return true
-	}
-
-	if !drain() {
-		return
-	}
-
 	s.Emitter.Emit(engine.TryBackupUnsafeReorgEvent{})
-	if !drain() {
-		return
-	}
 
 	s.Emitter.Emit(engine.TryUpdateEngineEvent{})
-	if !drain() {
-		return
-	}
 
 	if s.Engine.IsEngineSyncing() {
 		// The pipeline cannot move forwards if doing EL sync.
@@ -482,6 +402,14 @@ func (s *Driver) ResetDerivationPipeline(ctx context.Context) error {
 	}
 }
 
+func (s *Driver) OnUnsafeL2Payload(ctx context.Context, payload *eth.ExecutionPayloadEnvelope) error {
+	s.emitter.Emit(p2p.ReceivedBlockEvent{
+		From:     "",
+		Envelope: payload,
+	})
+	return nil
+}
+
 func (s *Driver) StartSequencer(ctx context.Context, blockHash common.Hash) error {
 	return s.sequencer.Start(ctx, blockHash)
 }
@@ -500,6 +428,11 @@ func (s *Driver) OverrideLeader(ctx context.Context) error {
 
 func (s *Driver) ConductorEnabled(ctx context.Context) (bool, error) {
 	return s.sequencer.ConductorEnabled(ctx), nil
+}
+
+func (s *Driver) SetRecoverMode(ctx context.Context, mode bool) error {
+	s.sequencer.SetRecoverMode(mode)
+	return nil
 }
 
 // SyncStatus blocks the driver event loop and captures the syncing status.

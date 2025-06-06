@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/log"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
@@ -30,6 +31,8 @@ type Config struct {
 	Driver driver.Config
 
 	Rollup rollup.Config
+
+	DependencySet depset.DependencySet
 
 	// P2PSigner will be used for signing off on published content
 	// if the node is sequencing and if the p2p stack is enabled
@@ -76,6 +79,12 @@ type Config struct {
 
 	// AltDA config
 	AltDA altda.CLIConfig
+
+	IgnoreMissingPectraBlobSchedule bool
+	FetchWithdrawalRootFromState    bool
+
+	// Experimental. Enables new opstack RPC namespace. Used by op-test-sequencer.
+	ExperimentalOPStackAPI bool
 }
 
 // ConductorRPCFunc retrieves the endpoint. The RPC may not immediately be available.
@@ -127,6 +136,8 @@ func (cfg *Config) LoadPersisted(log log.Logger) error {
 	return nil
 }
 
+var ErrMissingPectraBlobSchedule = errors.New("probably missing Pectra blob schedule")
+
 // Check verifies that the given configuration makes sense
 func (cfg *Config) Check() error {
 	if err := cfg.L1.Check(); err != nil {
@@ -143,16 +154,24 @@ func (cfg *Config) Check() error {
 			return fmt.Errorf("misconfigured L1 Beacon API endpoint: %w", err)
 		}
 	}
-	if cfg.Rollup.InteropTime != nil {
-		if cfg.InteropConfig == nil {
-			return fmt.Errorf("the Interop upgrade is scheduled (timestamp = %d) but no interop node config is set", *cfg.Rollup.InteropTime)
-		}
-		if err := cfg.InteropConfig.Check(); err != nil {
-			return fmt.Errorf("misconfigured interop: %w", err)
-		}
+	if cfg.InteropConfig == nil {
+		return errors.New("missing interop config")
+	}
+	if err := cfg.InteropConfig.Check(); err != nil {
+		return fmt.Errorf("misconfigured interop: %w", err)
 	}
 	if err := cfg.Rollup.Check(); err != nil {
 		return fmt.Errorf("rollup config error: %w", err)
+	}
+	if !cfg.IgnoreMissingPectraBlobSchedule && cfg.Rollup.ProbablyMissingPectraBlobSchedule() {
+		log.Error("Your rollup config seems to be missing the Pectra blob schedule fix. " +
+			"Reach out to your chain operator for the correct Pectra blob schedule configuration. " +
+			"If you know what you are doing, you can disable this error by setting the " +
+			"'--ignore-missing-pectra-blob-schedule' flag or 'IGNORE_MISSING_PECTRA_BLOB_SCHEDULE' env var.")
+		return ErrMissingPectraBlobSchedule
+	}
+	if cfg.Rollup.InteropTime != nil && cfg.DependencySet == nil {
+		return fmt.Errorf("the Interop upgrade is scheduled (timestamp = %d) but not dependency set is configured", *cfg.Rollup.InteropTime)
 	}
 	if err := cfg.Metrics.Check(); err != nil {
 		return fmt.Errorf("metrics config error: %w", err)

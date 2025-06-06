@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/urfave/cli/v2"
@@ -35,6 +36,11 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 	}
 
 	rollupConfig, err := NewRollupConfigFromCLI(log, ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	depSet, err := NewDependencySetFromCLI(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +91,7 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		L1:            l1Endpoint,
 		L2:            l2Endpoint,
 		Rollup:        *rollupConfig,
+		DependencySet: depSet,
 		Driver:        *driverConfig,
 		Beacon:        NewBeaconEndpointConfig(ctx),
 		InteropConfig: NewSupervisorEndpointConfig(ctx),
@@ -115,6 +122,11 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 		ConductorRpcTimeout: ctx.Duration(flags.ConductorRpcTimeoutFlag.Name),
 
 		AltDA: altda.ReadCLIConfig(ctx),
+
+		IgnoreMissingPectraBlobSchedule: ctx.Bool(flags.IgnoreMissingPectraBlobSchedule.Name),
+		FetchWithdrawalRootFromState:    ctx.Bool(flags.FetchWithdrawalRootFromState.Name),
+
+		ExperimentalOPStackAPI: ctx.Bool(flags.ExperimentalOPStackAPI.Name),
 	}
 
 	if err := cfg.LoadPersisted(log); err != nil {
@@ -134,7 +146,6 @@ func NewConfig(ctx *cli.Context, log log.Logger) (*node.Config, error) {
 
 func NewSupervisorEndpointConfig(ctx *cli.Context) *interop.Config {
 	return &interop.Config{
-		SupervisorAddr:   ctx.String(flags.InteropSupervisor.Name),
 		RPCAddr:          ctx.String(flags.InteropRPCAddr.Name),
 		RPCPort:          ctx.Int(flags.InteropRPCPort.Name),
 		RPCJwtSecretPath: ctx.String(flags.InteropJWTSecret.Name),
@@ -194,6 +205,7 @@ func NewDriverConfig(ctx *cli.Context) *driver.Config {
 		SequencerEnabled:    ctx.Bool(flags.SequencerEnabledFlag.Name),
 		SequencerStopped:    ctx.Bool(flags.SequencerStoppedFlag.Name),
 		SequencerMaxSafeLag: ctx.Uint64(flags.SequencerMaxSafeLagFlag.Name),
+		RecoverMode:         ctx.Bool(flags.SequencerRecoverMode.Name),
 	}
 }
 
@@ -266,6 +278,26 @@ func applyOverrides(ctx *cli.Context, rollupConfig *rollup.Config) {
 		holocene := ctx.Uint64(opflags.HoloceneOverrideFlagName)
 		rollupConfig.HoloceneTime = &holocene
 	}
+	if ctx.IsSet(opflags.PectraBlobScheduleOverrideFlagName) {
+		pectrablobschedule := ctx.Uint64(opflags.PectraBlobScheduleOverrideFlagName)
+		rollupConfig.PectraBlobScheduleTime = &pectrablobschedule
+	}
+	if ctx.IsSet(opflags.IsthmusOverrideFlagName) {
+		isthmus := ctx.Uint64(opflags.IsthmusOverrideFlagName)
+		rollupConfig.IsthmusTime = &isthmus
+	}
+	if ctx.IsSet(opflags.InteropOverrideFlagName) {
+		interop := ctx.Uint64(opflags.InteropOverrideFlagName)
+		rollupConfig.InteropTime = &interop
+	}
+}
+
+func NewDependencySetFromCLI(ctx *cli.Context) (depset.DependencySet, error) {
+	if !ctx.IsSet(flags.InteropDependencySet.Name) {
+		return nil, nil
+	}
+	loader := &depset.JSONDependencySetLoader{Path: ctx.Path(flags.InteropDependencySet.Name)}
+	return loader.LoadDependencySet(ctx.Context)
 }
 
 func NewSyncConfig(ctx *cli.Context, log log.Logger) (*sync.Config, error) {

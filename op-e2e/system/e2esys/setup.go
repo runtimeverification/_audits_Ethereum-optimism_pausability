@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/maps"
@@ -47,6 +49,7 @@ import (
 	batcherFlags "github.com/ethereum-optimism/optimism/op-batcher/flags"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-e2e/config"
+	"github.com/ethereum-optimism/optimism/op-e2e/config/secrets"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/batcher"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/fakebeacon"
@@ -61,6 +64,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/driver"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
 	l2os "github.com/ethereum-optimism/optimism/op-proposer/proposer"
 	"github.com/ethereum-optimism/optimism/op-service/client"
@@ -70,6 +74,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum-optimism/optimism/op-service/predeploys"
+	opsigner "github.com/ethereum-optimism/optimism/op-service/signer"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
@@ -105,9 +110,9 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 		opt(sco)
 	}
 
-	secrets, err := e2eutils.DefaultMnemonicConfig.Secrets()
-	require.NoError(t, err)
+	secrets := secrets.DefaultSecrets
 	deployConfig := config.DeployConfig(sco.AllocType)
+	require.Nil(t, deployConfig.L2GenesisJovianTimeOffset, "jovian not supported yet")
 	deployConfig.L1GenesisBlockTimestamp = hexutil.Uint64(time.Now().Unix())
 	e2eutils.ApplyDeployConfigForks(deployConfig)
 	require.NoError(t, deployConfig.Check(testlog.Logger(t, log.LevelInfo)),
@@ -149,6 +154,7 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 					ListenPort:  0,
 					EnableAdmin: true,
 				},
+				InteropConfig:               &interop.Config{},
 				L1EpochPollInterval:         time.Second * 2,
 				RuntimeConfigReloadInterval: time.Minute * 10,
 				ConfigPersistence:           &rollupNode.DisabledConfigPersistence{},
@@ -165,6 +171,7 @@ func DefaultSystemConfig(t testing.TB, opts ...SystemConfigOpt) SystemConfig {
 					ListenPort:  0,
 					EnableAdmin: true,
 				},
+				InteropConfig:               &interop.Config{},
 				L1EpochPollInterval:         time.Second * 4,
 				RuntimeConfigReloadInterval: time.Minute * 10,
 				ConfigPersistence:           &rollupNode.DisabledConfigPersistence{},
@@ -197,6 +204,7 @@ func RegolithSystemConfig(t *testing.T, regolithTimeOffset *hexutil.Uint64, opts
 	cfg.DeployConfig.L2GenesisGraniteTimeOffset = nil
 	cfg.DeployConfig.L2GenesisHoloceneTimeOffset = nil
 	cfg.DeployConfig.L2GenesisIsthmusTimeOffset = nil
+	cfg.DeployConfig.L2GenesisJovianTimeOffset = nil
 	// ADD NEW FORKS HERE!
 	return cfg
 }
@@ -246,6 +254,12 @@ func IsthmusSystemConfig(t *testing.T, isthmusTimeOffset *hexutil.Uint64, opts .
 	return cfg
 }
 
+func JovianSystemConfig(t *testing.T, jovianTimeOffset *hexutil.Uint64, opts ...SystemConfigOpt) SystemConfig {
+	cfg := IsthmusSystemConfig(t, &genesisTime, opts...)
+	cfg.DeployConfig.L2GenesisJovianTimeOffset = jovianTimeOffset
+	return cfg
+}
+
 func writeDefaultJWT(t testing.TB) string {
 	// Sadly the geth node config cannot load JWT secret from memory, it has to be a file
 	jwtPath := path.Join(t.TempDir(), "jwt_secret")
@@ -261,7 +275,7 @@ type DepositContractConfig struct {
 }
 
 type SystemConfig struct {
-	Secrets                *e2eutils.Secrets
+	Secrets                *secrets.Secrets
 	L1InfoPredeployAddress common.Address
 
 	DeployConfig  *genesis.DeployConfig
@@ -315,7 +329,7 @@ type SystemConfig struct {
 	// Default is 1 if unset.
 	BatcherTargetNumFrames int
 
-	// whether to actually use BatcherMaxL1TxSizeBytes for blobs, insteaf of max blob size
+	// whether to actually use BatcherMaxL1TxSizeBytes for blobs, instead of max blob size
 	BatcherUseMaxTxSizeForBlobs bool
 
 	// Singular (0) or span batches (1)
@@ -374,6 +388,24 @@ type System struct {
 	clients map[string]*ethclient.Client
 }
 
+func (sys *System) PrestateVariant() shared.PrestateVariant {
+	switch sys.AllocType() {
+	case config.AllocTypeMTCannonNext:
+		return shared.MTCannonNextVariant
+	default:
+		return shared.MTCannonVariant
+	}
+}
+
+func (sys *System) DisputeGameFactoryAddr() common.Address {
+	return sys.L1Deployments().DisputeGameFactoryProxy
+}
+
+func (sys *System) SupervisorClient() *sources.SupervisorClient {
+	sys.t.Fatal("supervisor client is not available for single chain system")
+	return nil
+}
+
 func (sys *System) Config() SystemConfig { return sys.Cfg }
 
 // AdvanceTime advances the system clock by the given duration.
@@ -401,6 +433,24 @@ func (sys *System) NodeEndpoint(name string) endpoint.RPC {
 	return ethInst.UserRPC()
 }
 
+func (sys *System) L2NodeEndpoints() []endpoint.RPC {
+	return []endpoint.RPC{sys.NodeEndpoint("sequencer")}
+}
+
+func (sys *System) SupervisorEndpoint() endpoint.RPC {
+	sys.t.Fatalf("supervisor endpoint is not supported for pre-interop System")
+	return nil
+}
+
+func (sys *System) DependencySet() *depset.StaticConfigDependencySet {
+	sys.t.Fatalf("dependency set source is not supported for pre-interop System")
+	return nil
+}
+
+func (sys *System) IsSupersystem() bool {
+	return false
+}
+
 func (sys *System) RollupEndpoint(name string) endpoint.RPC {
 	rNode, ok := sys.RollupNodes[name]
 	if !ok {
@@ -417,8 +467,16 @@ func (sys *System) RollupCfg() *rollup.Config {
 	return sys.RollupConfig
 }
 
+func (sys *System) RollupCfgs() []*rollup.Config {
+	return []*rollup.Config{sys.RollupConfig}
+}
+
 func (sys *System) L2Genesis() *core.Genesis {
 	return sys.L2GenesisCfg
+}
+
+func (sys *System) L2Geneses() []*core.Genesis {
+	return []*core.Genesis{sys.L2GenesisCfg}
 }
 
 func (sys *System) AllocType() config.AllocType {
@@ -515,7 +573,6 @@ func WithBatcherCompressionAlgo(ca derive.CompressionAlgo) StartOption {
 func WithBatcherThrottling(interval time.Duration, threshold, txSize, blockSize uint64) StartOption {
 	return StartOption{
 		BatcherMod: func(cfg *bss.CLIConfig) {
-			cfg.ThrottleInterval = interval
 			cfg.ThrottleThreshold = threshold
 			cfg.ThrottleTxSize = txSize
 			cfg.ThrottleBlockSize = blockSize
@@ -551,6 +608,9 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 		c = sys.TimeTravelClock
 	}
 
+	// sanity-check the deploy config
+	require.Nil(t, cfg.DeployConfig.L2GenesisJovianTimeOffset, "Jovian is not supported in op-e2e tests yet")
+
 	if err := cfg.DeployConfig.Check(testlog.Logger(t, log.LevelInfo)); err != nil {
 		return nil, err
 	}
@@ -585,7 +645,7 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 
 	t.Log("Generating L2 genesis", "l2_allocs_mode", string(allocsMode))
 	l2Allocs := config.L2Allocs(cfg.AllocType, allocsMode)
-	l2Genesis, err := genesis.BuildL2Genesis(cfg.DeployConfig, l2Allocs, l1Block.Header())
+	l2Genesis, err := genesis.BuildL2Genesis(cfg.DeployConfig, l2Allocs, eth.BlockRefFromHeader(l1Block.Header()))
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +706,9 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 			FjordTime:               cfg.DeployConfig.FjordTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			GraniteTime:             cfg.DeployConfig.GraniteTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			HoloceneTime:            cfg.DeployConfig.HoloceneTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			PectraBlobScheduleTime:  cfg.DeployConfig.PectraBlobScheduleTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			IsthmusTime:             cfg.DeployConfig.IsthmusTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
+			JovianTime:              cfg.DeployConfig.JovianTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			InteropTime:             cfg.DeployConfig.InteropTime(uint64(cfg.DeployConfig.L1GenesisBlockTimestamp)),
 			ProtocolVersionsAddress: cfg.L1Deployments.ProtocolVersionsProxy,
 			AltDAConfig:             rollupAltDAConfig,
@@ -675,7 +737,7 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 	sys.L1BeaconAPIAddr = endpoint.RestHTTPURL(beaconApiAddr)
 
 	// Initialize nodes
-	l1Geth, err := geth.InitL1(
+	l1Geth, _, err := geth.InitL1(
 		cfg.DeployConfig.L1BlockTime, cfg.L1FinalizedDistance, l1Genesis, c,
 		path.Join(cfg.BlobsPath, "l1_el"), bcn, cfg.GethOptions[RoleL1]...)
 	if err != nil {
@@ -808,7 +870,7 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 			c.P2P = p
 
 			if c.Driver.SequencerEnabled && c.P2PSigner == nil {
-				c.P2PSigner = &p2p.PreparedSigner{Signer: p2p.NewLocalSigner(cfg.Secrets.SequencerP2P)}
+				c.P2PSigner = &p2p.PreparedSigner{Signer: opsigner.NewLocalSigner(cfg.Secrets.SequencerP2P)}
 			}
 		}
 
@@ -923,8 +985,8 @@ func (cfg SystemConfig) Start(t *testing.T, startOpts ...StartOption) (*System, 
 	}
 	batcherCLIConfig := &bss.CLIConfig{
 		L1EthRpc:                 sys.EthInstances[RoleL1].UserRPC().RPC(),
-		L2EthRpc:                 sys.EthInstances[RoleSeq].UserRPC().RPC(),
-		RollupRpc:                sys.RollupNodes[RoleSeq].UserRPC().RPC(),
+		L2EthRpc:                 []string{sys.EthInstances[RoleSeq].UserRPC().RPC()},
+		RollupRpc:                []string{sys.RollupNodes[RoleSeq].UserRPC().RPC()},
 		MaxPendingTransactions:   cfg.BatcherMaxPendingTransactions,
 		MaxChannelDuration:       1,
 		MaxL1TxSize:              batcherMaxL1TxSizeBytes,

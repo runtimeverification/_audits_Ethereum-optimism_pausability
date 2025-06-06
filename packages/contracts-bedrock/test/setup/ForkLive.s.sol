@@ -10,20 +10,26 @@ import { DelegateCaller } from "test/mocks/Callers.sol";
 // Scripts
 import { Deployer } from "scripts/deploy/Deployer.sol";
 import { Deploy } from "scripts/deploy/Deploy.s.sol";
+import { Config } from "scripts/libraries/Config.sol";
 
 // Libraries
 import { GameTypes, Claim } from "src/dispute/lib/Types.sol";
 import { EIP1967Helper } from "test/mocks/EIP1967Helper.sol";
+import { LibString } from "solady/src/utils/LibString.sol";
 
 // Interfaces
 import { IFaultDisputeGame } from "interfaces/dispute/IFaultDisputeGame.sol";
 import { IPermissionedDisputeGame } from "interfaces/dispute/IPermissionedDisputeGame.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
+import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
 import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
+import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
+import { IOptimismPortal2 } from "interfaces/L1/IOptimismPortal2.sol";
 
 /// @title ForkLive
 /// @notice This script is called by Setup.sol as a preparation step for the foundry test suite, and is run as an
@@ -34,21 +40,23 @@ import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.so
 ///         Therefore this script can only be run against a fork of a production network which is listed in the
 ///         superchain-registry.
 ///         This contract must not have constructor logic because it is set into state using `etch`.
+
 contract ForkLive is Deployer {
     using stdToml for string;
+    using LibString for string;
 
     bool public useOpsRepo;
 
     /// @notice Returns the base chain name to use for forking
     /// @return The base chain name as a string
     function baseChain() internal view returns (string memory) {
-        return vm.envOr("FORK_BASE_CHAIN", string("mainnet"));
+        return Config.forkBaseChain();
     }
 
     /// @notice Returns the OP chain name to use for forking
     /// @return The OP chain name as a string
     function opChain() internal view returns (string memory) {
-        return vm.envOr("FORK_OP_CHAIN", string("op"));
+        return Config.forkOpChain();
     }
 
     /// @dev This function sets up the system to test it as follows:
@@ -58,7 +66,7 @@ contract ForkLive is Deployer {
     ///      4. If the environment variable wasn't set, deploy the updated OPCM and implementations of the contracts.
     ///      5. Upgrade the system using the OPCM.upgrade() function if useUpgradedFork is true.
     function run() public {
-        string memory superchainOpsAllocsPath = vm.envOr("SUPERCHAIN_OPS_ALLOCS_PATH", string(""));
+        string memory superchainOpsAllocsPath = Config.superchainOpsAllocsPath();
 
         useOpsRepo = bytes(superchainOpsAllocsPath).length > 0;
         if (useOpsRepo) {
@@ -96,16 +104,24 @@ contract ForkLive is Deployer {
     ///      using either the `saveProxyAndImpl` or `artifacts.save()` functions.
     function _readSuperchainRegistry() internal {
         string memory superchainBasePath = "./lib/superchain-registry/superchain/configs/";
+        string memory validationBasePath = "./lib/superchain-registry/validation/standard/";
 
         string memory superchainToml = vm.readFile(string.concat(superchainBasePath, baseChain(), "/superchain.toml"));
         string memory opToml = vm.readFile(string.concat(superchainBasePath, baseChain(), "/", opChain(), ".toml"));
+
+        string memory standardVersionsToml =
+            vm.readFile(string.concat(validationBasePath, "standard-versions-", baseChain(), ".toml"));
+
+        standardVersionsToml = standardVersionsToml.replace('"op-contracts/v2.0.0-rc.1"', "RELEASE");
 
         // Slightly hacky, we encode the uint chainId as an address to save it in Artifacts
         artifacts.save("L2ChainId", address(uint160(vm.parseTomlUint(opToml, ".chain_id"))));
         // Superchain shared contracts
         saveProxyAndImpl("SuperchainConfig", superchainToml, ".superchain_config_addr");
         saveProxyAndImpl("ProtocolVersions", superchainToml, ".protocol_versions_addr");
-        artifacts.save("OPContractsManager", vm.parseTomlAddress(superchainToml, ".op_contracts_manager_proxy_addr"));
+        artifacts.save(
+            "OPContractsManager", vm.parseTomlAddress(standardVersionsToml, "$.RELEASE.op_contracts_manager.address")
+        );
 
         // Core contracts
         artifacts.save("ProxyAdmin", vm.parseTomlAddress(opToml, ".addresses.ProxyAdmin"));
@@ -115,6 +131,15 @@ contract ForkLive is Deployer {
         address optimismPortal = vm.parseTomlAddress(opToml, ".addresses.OptimismPortalProxy");
         artifacts.save("OptimismPortalProxy", optimismPortal);
         artifacts.save("OptimismPortal2Impl", EIP1967Helper.getImplementation(optimismPortal));
+
+        // Get the lockbox address from the portal, and save it
+        /// NOTE: Using try catch because this function could be called before or after the upgrade.
+        try IOptimismPortal2(payable(optimismPortal)).ethLockbox() returns (IETHLockbox ethLockbox_) {
+            console.log("ForkLive: ETHLockboxProxy found: %s", address(ethLockbox_));
+            artifacts.save("ETHLockboxProxy", address(ethLockbox_));
+        } catch {
+            console.log("ForkLive: ETHLockboxProxy not found");
+        }
 
         address addressManager = vm.parseTomlAddress(opToml, ".addresses.AddressManager");
         artifacts.save("AddressManager", addressManager);
@@ -131,7 +156,6 @@ contract ForkLive is Deployer {
         // Fault proof proxied contracts
         saveProxyAndImpl("AnchorStateRegistry", opToml, ".addresses.AnchorStateRegistryProxy");
         saveProxyAndImpl("DisputeGameFactory", opToml, ".addresses.DisputeGameFactoryProxy");
-        saveProxyAndImpl("DelayedWETH", opToml, ".addresses.DelayedWETHProxy");
 
         // Fault proof non-proxied contracts
         // For chains that don't have a permissionless game, we save the dispute game and WETH
@@ -151,6 +175,10 @@ contract ForkLive is Deployer {
             IFaultDisputeGame(address(disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON)));
         artifacts.save("PermissionedDisputeGame", address(permissionedDisputeGame));
         artifacts.save("PermissionedDelayedWETHProxy", address(permissionedDisputeGame.weth()));
+
+        // The SR seems out-of-date, so pull the DelayedWETH addresses from the PermissionedDisputeGame.
+        artifacts.save("DelayedWETHProxy", address(permissionedDisputeGame.weth()));
+        artifacts.save("DelayedWETHImpl", EIP1967Helper.getImplementation(address(permissionedDisputeGame.weth())));
     }
 
     /// @notice Calls to the Deploy.s.sol contract etched by Setup.sol to a deterministic address, sets up the
@@ -181,7 +209,40 @@ contract ForkLive is Deployer {
         // then reset its code to the original code.
         bytes memory upgraderCode = address(upgrader).code;
         vm.etch(upgrader, vm.getDeployedCode("test/mocks/Callers.sol:DelegateCaller"));
+
+        // The 2.0.0 OPCM requires that the SuperchainConfig and ProtocolVersions contracts have
+        // been upgraded before it will upgrade other contracts. These contracts can only be
+        // upgraded by the Superchain ProxyAdmin owner. For simplicity, we always just call U13
+        // once without any chain configs to trigger this upgrade.
+        ISuperchainConfig superchainConfig = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
+        address superchainPAO = IProxyAdmin(EIP1967Helper.getAdmin(address(superchainConfig))).owner();
+        vm.etch(superchainPAO, vm.getDeployedCode("test/mocks/Callers.sol:DelegateCaller"));
+        DelegateCaller(superchainPAO).dcForward(
+            address(0x026b2F158255Beac46c1E7c6b8BbF29A4b6A7B76),
+            abi.encodeCall(IOPContractsManager.upgrade, (new IOPContractsManager.OpChainConfig[](0)))
+        );
+
+        // Start by doing Upgrade 13.
+        DelegateCaller(upgrader).dcForward(
+            address(0x026b2F158255Beac46c1E7c6b8BbF29A4b6A7B76), abi.encodeCall(IOPContractsManager.upgrade, (opChains))
+        );
+
+        // Then do Upgrade 14.
+        DelegateCaller(upgrader).dcForward(
+            address(0x3A1f523a4bc09cd344A2745a108Bb0398288094F), abi.encodeCall(IOPContractsManager.upgrade, (opChains))
+        );
+
+        // Like with Upgrade 13, we need to first call U16 from the Superchain ProxyAdmin owner to
+        // trigger the upgrade of the SuperchainConfig contract.
+        vm.etch(superchainPAO, vm.getDeployedCode("test/mocks/Callers.sol:DelegateCaller"));
+        DelegateCaller(superchainPAO).dcForward(
+            address(opcm), abi.encodeCall(IOPContractsManager.upgrade, (new IOPContractsManager.OpChainConfig[](0)))
+        );
+
+        // Then do the final upgrade.
         DelegateCaller(upgrader).dcForward(address(opcm), abi.encodeCall(IOPContractsManager.upgrade, (opChains)));
+
+        // Reset the upgrader to the original code.
         vm.etch(upgrader, upgraderCode);
 
         console.log("ForkLive: Saving newly deployed contracts");
@@ -193,12 +254,24 @@ contract ForkLive is Deployer {
 
         address permissionlessDisputeGame = address(disputeGameFactory.gameImpls(GameTypes.CANNON));
         if (permissionlessDisputeGame != address(0)) {
+            // Both names are used in different places, so we save both.
             artifacts.save("PermissionlessDisputeGame", address(permissionlessDisputeGame));
+            artifacts.save("FaultDisputeGame", address(permissionlessDisputeGame));
         }
 
         IAnchorStateRegistry newAnchorStateRegistry =
             IPermissionedDisputeGame(permissionedDisputeGame).anchorStateRegistry();
         artifacts.save("AnchorStateRegistryProxy", address(newAnchorStateRegistry));
+
+        // Get the lockbox address from the portal, and save it
+        IOptimismPortal2 portal = IOptimismPortal2(artifacts.mustGetAddress("OptimismPortalProxy"));
+        address lockboxAddress = address(portal.ethLockbox());
+        artifacts.save("ETHLockboxProxy", lockboxAddress);
+
+        // Get the new DelayedWETH address and save it (might be a new proxy).
+        IDelayedWETH newDelayedWeth = IPermissionedDisputeGame(permissionedDisputeGame).weth();
+        artifacts.save("DelayedWETHProxy", address(newDelayedWeth));
+        artifacts.save("DelayedWETHImpl", EIP1967Helper.getImplementation(address(newDelayedWeth)));
     }
 
     /// @notice Saves the proxy and implementation addresses for a contract name

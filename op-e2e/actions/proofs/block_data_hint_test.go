@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_OPProgramAction_BlockDataHint(gt *testing.T) {
+func Test_ProgramAction_BlockDataHint(gt *testing.T) {
 	testCfg := &helpers.TestCfg[any]{
 		Hardfork: helpers.LatestFork,
 	}
@@ -152,6 +152,7 @@ func createVerifier(t actionsHelpers.Testing, env *helpers.L2FaultProofEnv) (*ac
 		altda.Disabled,
 		l2EngineCl,
 		env.Sd.RollupCfg,
+		env.Sd.DependencySet,
 		&sync.Config{},
 		safedb.Disabled,
 	), engine

@@ -15,8 +15,10 @@ import (
 )
 
 func FuzzStateSyscallCloneMT(f *testing.F) {
-	v := GetMultiThreadedTestCase(f)
-	f.Fuzz(func(t *testing.T, nextThreadId, stackPtr Word, seed int64) {
+	versions := GetMipsVersionTestCases(f)
+	require.NotZero(f, len(versions), "must have at least one multithreaded version supported")
+	f.Fuzz(func(t *testing.T, nextThreadId, stackPtr Word, seed int64, version uint) {
+		v := versions[int(version)%len(versions)]
 		goVm := v.VMFactory(nil, os.Stdout, os.Stderr, testutil.CreateLogger(), testutil.WithRandomization(seed))
 		state := mttestutil.GetMtState(t, goVm)
 		// Update existing threads to avoid collision with nextThreadId
@@ -44,12 +46,12 @@ func FuzzStateSyscallCloneMT(f *testing.F) {
 		expected.PrestateActiveThread().Registers[7] = 0
 		// Set expectations for new, cloned thread
 		expected.ActiveThreadId = nextThreadId
-		epxectedNewThread := expected.ExpectNewThread()
-		epxectedNewThread.PC = state.GetCpu().NextPC
-		epxectedNewThread.NextPC = state.GetCpu().NextPC + 4
-		epxectedNewThread.Registers[register.RegSyscallNum] = 0
-		epxectedNewThread.Registers[register.RegSyscallErrno] = 0
-		epxectedNewThread.Registers[register.RegSP] = stackPtr
+		expectedNewThread := expected.ExpectNewThread()
+		expectedNewThread.PC = state.GetCpu().NextPC
+		expectedNewThread.NextPC = state.GetCpu().NextPC + 4
+		expectedNewThread.Registers[register.RegSyscallNum] = 0
+		expectedNewThread.Registers[register.RegSyscallErrno] = 0
+		expectedNewThread.Registers[register.RegSP] = stackPtr
 		expected.NextThreadId = nextThreadId + 1
 		expected.StepsSinceLastContextSwitch = 0
 		if state.TraverseRight {

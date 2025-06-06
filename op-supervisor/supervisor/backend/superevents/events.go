@@ -91,16 +91,6 @@ func (ev FinalizedL2UpdateEvent) String() string {
 	return "finalized-l2-update"
 }
 
-type LocalSafeOutOfSyncEvent struct {
-	ChainID eth.ChainID
-	L1Ref   eth.BlockRef
-	Err     error
-}
-
-func (ev LocalSafeOutOfSyncEvent) String() string {
-	return "local-safe-out-of-sync"
-}
-
 type LocalUnsafeReceivedEvent struct {
 	ChainID        eth.ChainID
 	NewLocalUnsafe eth.BlockRef
@@ -113,6 +103,7 @@ func (ev LocalUnsafeReceivedEvent) String() string {
 type LocalDerivedEvent struct {
 	ChainID eth.ChainID
 	Derived types.DerivedBlockRefPair
+	NodeID  string
 }
 
 func (ev LocalDerivedEvent) String() string {
@@ -128,13 +119,30 @@ func (ev LocalDerivedOriginUpdateEvent) String() string {
 	return "local-derived-origin-update"
 }
 
-type AnchorEvent struct {
+type ResetPreInteropRequestEvent struct {
 	ChainID eth.ChainID
-	Anchor  types.DerivedBlockRefPair
 }
 
-func (ev AnchorEvent) String() string {
-	return "anchor"
+func (ev ResetPreInteropRequestEvent) String() string {
+	return "reset-pre-interop-request"
+}
+
+type UnsafeActivationBlockEvent struct {
+	Unsafe  eth.BlockRef
+	ChainID eth.ChainID
+}
+
+func (ev UnsafeActivationBlockEvent) String() string {
+	return "unsafe-activation-block-received"
+}
+
+type SafeActivationBlockEvent struct {
+	Safe    types.DerivedBlockRefPair
+	ChainID eth.ChainID
+}
+
+func (ev SafeActivationBlockEvent) String() string {
+	return "safe-activation-block-received"
 }
 
 type InvalidateLocalSafeEvent struct {
@@ -169,4 +177,22 @@ type ChainRewoundEvent struct {
 
 func (ev ChainRewoundEvent) String() string {
 	return "chain-rewound"
+}
+
+type UpdateLocalSafeFailedEvent struct {
+	ChainID eth.ChainID
+	Err     error
+	NodeID  string
+}
+
+func (ev UpdateLocalSafeFailedEvent) String() string {
+	return "update-local-safe-failed"
+}
+
+type ChainIndexingContinueEvent struct {
+	ChainID eth.ChainID
+}
+
+func (ev ChainIndexingContinueEvent) String() string {
+	return "chain-indexing-continue"
 }

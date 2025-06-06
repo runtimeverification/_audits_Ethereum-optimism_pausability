@@ -24,17 +24,35 @@ func TestTransactionProcessor_Sign(t *testing.T) {
 
 	chainID := big.NewInt(1)
 	client := new(mockEthClient)
-	processor := NewTransactionProcessor(client, chainID)
+
+	// Create a wallet with the test key
+	chain := newChain(chainID.String(), WalletMap{}, nil, AddressMap{}, []Node{})
+	wallet, err := NewWallet(testKey, testAddr, chain)
+	assert.NoError(t, err)
+
+	processor := &transactionProcessor{
+		client:     client,
+		chainID:    chainID,
+		privateKey: wallet.PrivateKey(),
+	}
+
+	invalidProcessor := &transactionProcessor{
+		client:  client,
+		chainID: chainID,
+		// No private key set
+	}
 
 	tests := []struct {
 		name       string
+		processor  *transactionProcessor
 		tx         Transaction
 		wantType   uint8
 		wantErr    bool
 		errMessage string
 	}{
 		{
-			name: "legacy tx",
+			name:      "legacy tx",
+			processor: processor,
 			tx: &EthTx{
 				tx: types.NewTransaction(
 					0,
@@ -51,7 +69,8 @@ func TestTransactionProcessor_Sign(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name: "dynamic fee tx",
+			name:      "dynamic fee tx",
+			processor: processor,
 			tx: &EthTx{
 				tx: types.NewTx(&types.DynamicFeeTx{
 					ChainID:   chainID,
@@ -70,7 +89,8 @@ func TestTransactionProcessor_Sign(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name: "invalid private key",
+			name:      "invalid private key",
+			processor: invalidProcessor,
 			tx: &EthTx{
 				tx: types.NewTransaction(
 					0,
@@ -84,18 +104,13 @@ func TestTransactionProcessor_Sign(t *testing.T) {
 				txType: types.LegacyTxType,
 			},
 			wantErr:    true,
-			errMessage: "invalid private key",
+			errMessage: "private key is nil",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := testKey
-			if tt.wantErr {
-				key = "invalid"
-			}
-
-			signedTx, err := processor.Sign(tt.tx, key)
+			signedTx, err := tt.processor.Sign(tt.tx)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMessage)
@@ -191,9 +206,10 @@ type mockTransaction struct {
 	from common.Address
 }
 
-func (m *mockTransaction) Hash() common.Hash    { return common.Hash{} }
-func (m *mockTransaction) From() common.Address { return m.from }
-func (m *mockTransaction) To() *common.Address  { return nil }
-func (m *mockTransaction) Value() *big.Int      { return nil }
-func (m *mockTransaction) Data() []byte         { return nil }
-func (m *mockTransaction) Type() uint8          { return 0 }
+func (m *mockTransaction) Hash() common.Hash            { return common.Hash{} }
+func (m *mockTransaction) From() common.Address         { return m.from }
+func (m *mockTransaction) To() *common.Address          { return nil }
+func (m *mockTransaction) Value() *big.Int              { return nil }
+func (m *mockTransaction) Data() []byte                 { return nil }
+func (m *mockTransaction) AccessList() types.AccessList { return nil }
+func (m *mockTransaction) Type() uint8                  { return 0 }

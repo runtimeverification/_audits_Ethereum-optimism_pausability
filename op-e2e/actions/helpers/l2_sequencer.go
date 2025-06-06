@@ -3,6 +3,7 @@ package helpers
 import (
 	"context"
 
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
@@ -37,6 +38,10 @@ func (m *MockL1OriginSelector) FindL1Origin(ctx context.Context, l2Head eth.L2Bl
 	return m.actual.FindL1Origin(ctx, l2Head)
 }
 
+func (m *MockL1OriginSelector) SetRecoverMode(bool) {
+	// noop
+}
+
 // L2Sequencer is an actor that functions like a rollup node,
 // without the full P2P/API/Node stack, but just the derivation state, and simplified driver with sequencing ability.
 type L2Sequencer struct {
@@ -51,10 +56,10 @@ type L2Sequencer struct {
 }
 
 func NewL2Sequencer(t Testing, log log.Logger, l1 derive.L1Fetcher, blobSrc derive.L1BlobsFetcher,
-	altDASrc driver.AltDAIface, eng L2API, cfg *rollup.Config, seqConfDepth uint64,
+	altDASrc driver.AltDAIface, eng L2API, cfg *rollup.Config, depSet depset.DependencySet, seqConfDepth uint64,
 ) *L2Sequencer {
-	ver := NewL2Verifier(t, log, l1, blobSrc, altDASrc, eng, cfg, &sync.Config{}, safedb.Disabled)
-	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, l1, eng)
+	ver := NewL2Verifier(t, log, l1, blobSrc, altDASrc, eng, cfg, depSet, &sync.Config{}, safedb.Disabled)
+	attrBuilder := derive.NewFetchingAttributesBuilder(cfg, depSet, l1, eng)
 	seqConfDepthL1 := confdepth.NewConfDepth(seqConfDepth, ver.syncStatus.L1Head, l1)
 	originSelector := sequencing.NewL1OriginSelector(t.Ctx(), log, cfg, seqConfDepthL1)
 	l1OriginSelector := &MockL1OriginSelector{
@@ -66,18 +71,16 @@ func NewL2Sequencer(t Testing, log log.Logger, l1 derive.L1Fetcher, blobSrc deri
 	asyncGossip := async.NoOpGossiper{}
 	seq := sequencing.NewSequencer(t.Ctx(), log, cfg, attrBuilder, l1OriginSelector,
 		seqStateListener, conduc, asyncGossip, metr)
-	opts := event.DefaultRegisterOpts()
-	opts.Emitter = event.EmitterOpts{
-		Limiting: true,
+	opts := event.WithEmitLimiter(
 		// TestSyncBatchType/DerivationWithFlakyL1RPC does *a lot* of quick retries
 		// TestL2BatcherBatchType/ExtendedTimeWithoutL1Batches as well.
-		Rate:  rate.Limit(100_000),
-		Burst: 100_000,
-		OnLimited: func() {
+		rate.Limit(100_000),
+		100_000,
+		func() {
 			log.Warn("Hitting events rate-limit. An events code-path may be hot-looping.")
 			t.Fatal("Tests must not hot-loop events")
 		},
-	}
+	)
 	ver.eventSys.Register("sequencer", seq, opts)
 	ver.eventSys.Register("origin-selector", originSelector, opts)
 	require.NoError(t, seq.Init(t.Ctx(), true))
@@ -92,6 +95,7 @@ func NewL2Sequencer(t Testing, log log.Logger, l1 derive.L1Fetcher, blobSrc deri
 
 // ActL2StartBlock starts building of a new L2 block on top of the head
 func (s *L2Sequencer) ActL2StartBlock(t Testing) {
+	require.NoError(t, s.drainer.Drain()) // can't build when other work is still blocking
 	if !s.L2PipelineIdle {
 		t.InvalidAction("cannot start L2 build when derivation is not idle")
 		return
@@ -242,6 +246,13 @@ func (s *L2Sequencer) ActBuildL2ToHolocene(t Testing) {
 func (s *L2Sequencer) ActBuildL2ToIsthmus(t Testing) {
 	require.NotNil(t, s.RollupCfg.IsthmusTime, "cannot activate IsthmusTime when it is not scheduled")
 	for s.L2Unsafe().Time < *s.RollupCfg.IsthmusTime {
+		s.ActL2EmptyBlock(t)
+	}
+}
+
+func (s *L2Sequencer) ActBuildL2ToInterop(t Testing) {
+	require.NotNil(t, s.RollupCfg.InteropTime, "cannot activate InteropTime when it is not scheduled")
+	for s.L2Unsafe().Time < *s.RollupCfg.InteropTime {
 		s.ActL2EmptyBlock(t)
 	}
 }

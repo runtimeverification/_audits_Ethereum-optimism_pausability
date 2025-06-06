@@ -313,7 +313,7 @@ func SpanChannelOutCompressionUndo(t *testing.T, algo CompressionAlgo) {
 	// confirm that the second compression was not skipped
 	require.Greater(t, cout.compressor.Len(), 0)
 
-	// confirm that the second rlp is tht same size as the first (because the second batch was not added)
+	// confirm that the second rlp is that same size as the first (because the second batch was not added)
 	require.Equal(t, rlp1, cout.activeRLP().Len())
 }
 
@@ -360,7 +360,7 @@ type maxBlocksTest struct {
 func TestSpanChannelOut_MaxBlocksPerSpanBatch(t *testing.T) {
 	for i, tt := range []maxBlocksTest{
 		{
-			outputSize:        10_751,
+			outputSize:        9_109,
 			exactFull:         true,
 			numBatches:        15,
 			maxBlocks:         4,
@@ -368,14 +368,14 @@ func TestSpanChannelOut_MaxBlocksPerSpanBatch(t *testing.T) {
 			expLastNumBlocks:  3,
 		},
 		{
-			outputSize:        11_000,
+			outputSize:        9_200,
 			numBatches:        16,
 			maxBlocks:         4,
 			expNumSpanBatches: 4,
 			expLastNumBlocks:  3,
 		},
 		{
-			outputSize:        11_154,
+			outputSize:        9_310,
 			exactFull:         true,
 			numBatches:        16,
 			maxBlocks:         4,
@@ -383,14 +383,14 @@ func TestSpanChannelOut_MaxBlocksPerSpanBatch(t *testing.T) {
 			expLastNumBlocks:  4,
 		},
 		{
-			outputSize:        11_500,
+			outputSize:        9_400,
 			numBatches:        17,
 			maxBlocks:         4,
 			expNumSpanBatches: 4,
 			expLastNumBlocks:  4,
 		},
 		{
-			outputSize:        11_801,
+			outputSize:        9_933,
 			exactFull:         true,
 			numBatches:        17,
 			maxBlocks:         4,
@@ -398,7 +398,7 @@ func TestSpanChannelOut_MaxBlocksPerSpanBatch(t *testing.T) {
 			expLastNumBlocks:  1,
 		},
 		{
-			outputSize:        12_000,
+			outputSize:        10_000,
 			numBatches:        18,
 			maxBlocks:         4,
 			expNumSpanBatches: 5,

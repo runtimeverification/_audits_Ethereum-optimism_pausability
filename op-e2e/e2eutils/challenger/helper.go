@@ -3,7 +3,6 @@ package challenger
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	e2econfig "github.com/ethereum-optimism/optimism/op-e2e/config"
+	shared "github.com/ethereum-optimism/optimism/op-devstack/shared/challenger"
 	"github.com/ethereum-optimism/optimism/op-service/crypto"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/stretchr/testify/require"
@@ -34,14 +34,17 @@ import (
 
 type EndpointProvider interface {
 	NodeEndpoint(name string) endpoint.RPC
+	L2NodeEndpoints() []endpoint.RPC
 	RollupEndpoint(name string) endpoint.RPC
 	L1BeaconEndpoint() endpoint.RestHTTP
+	SupervisorEndpoint() endpoint.RPC
+	IsSupersystem() bool
 }
 
 type System interface {
-	RollupCfg() *rollup.Config
-	L2Genesis() *core.Genesis
-	AllocType() e2econfig.AllocType
+	RollupCfgs() []*rollup.Config
+	L2Geneses() []*core.Genesis
+	PrestateVariant() shared.PrestateVariant
 }
 type Helper struct {
 	log     log.Logger
@@ -101,63 +104,31 @@ func WithInvalidCannonPrestate() Option {
 	}
 }
 
-// FindMonorepoRoot finds the relative path to the monorepo root
-// Different tests might be nested in subdirectories of the op-e2e dir.
-func FindMonorepoRoot(t *testing.T) string {
-	path := "./"
-	// Only search up 5 directories
-	// Avoids infinite recursion if the root isn't found for some reason
-	for i := 0; i < 5; i++ {
-		_, err := os.Stat(path + "op-e2e")
-		if errors.Is(err, os.ErrNotExist) {
-			path = path + "../"
-			continue
-		}
-		require.NoErrorf(t, err, "Failed to stat %v even though it existed", path)
-		return path
-	}
-	t.Fatalf("Could not find monorepo root, trying up to %v", path)
-	return ""
+func WithDepset(t *testing.T, ds *depset.StaticConfigDependencySet) Option {
+	return handleOptError(t, shared.WithDepset(ds))
 }
 
-func applyCannonConfig(c *config.Config, t *testing.T, rollupCfg *rollup.Config, l2Genesis *core.Genesis, allocType e2econfig.AllocType) {
-	require := require.New(t)
-	root := FindMonorepoRoot(t)
-	c.Cannon.VmBin = root + "cannon/bin/cannon"
-	c.Cannon.Server = root + "op-program/bin/op-program"
-	if allocType == e2econfig.AllocTypeMTCannon {
-		t.Log("Using Cannon64 absolute prestate")
-		c.CannonAbsolutePreState = root + "op-program/bin/prestate-mt64.bin.gz"
-	} else {
-		c.CannonAbsolutePreState = root + "op-program/bin/prestate.bin.gz"
-	}
-	c.Cannon.SnapshotFreq = 10_000_000
-
-	genesisBytes, err := json.Marshal(l2Genesis)
-	require.NoError(err, "marshall l2 genesis config")
-	genesisFile := filepath.Join(c.Datadir, "l2-genesis.json")
-	require.NoError(os.WriteFile(genesisFile, genesisBytes, 0o644))
-	c.Cannon.L2GenesisPaths = []string{genesisFile}
-
-	rollupBytes, err := json.Marshal(rollupCfg)
-	require.NoError(err, "marshall rollup config")
-	rollupFile := filepath.Join(c.Datadir, "rollup.json")
-	require.NoError(os.WriteFile(rollupFile, rollupBytes, 0o644))
-	c.Cannon.RollupConfigPaths = []string{rollupFile}
+type MinimalT interface {
+	require.TestingT
+	TempDir() string
+	Logf(format string, args ...interface{})
 }
 
-func WithCannon(t *testing.T, system System) Option {
+func handleOptError(t *testing.T, opt shared.Option) Option {
 	return func(c *config.Config) {
-		c.TraceTypes = append(c.TraceTypes, types.TraceTypeCannon)
-		applyCannonConfig(c, t, system.RollupCfg(), system.L2Genesis(), system.AllocType())
+		require.NoError(t, opt(c))
 	}
+}
+func WithCannon(t *testing.T, system System) Option {
+	return handleOptError(t, shared.WithCannon(system.RollupCfgs(), system.L2Geneses(), system.PrestateVariant()))
 }
 
 func WithPermissioned(t *testing.T, system System) Option {
-	return func(c *config.Config) {
-		c.TraceTypes = append(c.TraceTypes, types.TraceTypePermissioned)
-		applyCannonConfig(c, t, system.RollupCfg(), system.L2Genesis(), system.AllocType())
-	}
+	return handleOptError(t, shared.WithPermissioned(system.RollupCfgs(), system.L2Geneses(), system.PrestateVariant()))
+}
+
+func WithSuperCannon(t *testing.T, system System) Option {
+	return handleOptError(t, shared.WithSuperCannon(system.RollupCfgs(), system.L2Geneses(), system.PrestateVariant()))
 }
 
 func WithAlphabet() Option {
@@ -189,7 +160,16 @@ func NewChallengerConfig(t *testing.T, sys EndpointProvider, l2NodeName string, 
 	// Use the NewConfig method to ensure we pick up any defaults that are set.
 	l1Endpoint := sys.NodeEndpoint("l1").RPC()
 	l1Beacon := sys.L1BeaconEndpoint().RestHTTP()
-	cfg := config.NewConfig(common.Address{}, l1Endpoint, l1Beacon, sys.RollupEndpoint(l2NodeName).RPC(), sys.NodeEndpoint(l2NodeName).RPC(), t.TempDir())
+	var cfg config.Config
+	if sys.IsSupersystem() {
+		var l2Endpoints []string
+		for _, l2Node := range sys.L2NodeEndpoints() {
+			l2Endpoints = append(l2Endpoints, l2Node.RPC())
+		}
+		cfg = config.NewInteropConfig(common.Address{}, l1Endpoint, l1Beacon, sys.SupervisorEndpoint().RPC(), l2Endpoints, t.TempDir())
+	} else {
+		cfg = config.NewConfig(common.Address{}, l1Endpoint, l1Beacon, sys.RollupEndpoint(l2NodeName).RPC(), sys.NodeEndpoint(l2NodeName).RPC(), t.TempDir())
+	}
 	cfg.Cannon.L2Custom = true
 	// The devnet can't set the absolute prestate output root because the contracts are deployed in L1 genesis
 	// before the L2 genesis is known.

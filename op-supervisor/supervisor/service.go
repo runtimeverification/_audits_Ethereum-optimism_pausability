@@ -25,6 +25,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/frontend"
 )
 
+var errInvalidMetricer = errors.New("invalid metricer")
+
 type Backend interface {
 	frontend.Backend
 }
@@ -134,7 +136,7 @@ func (su *SupervisorService) initMetricsServer(cfg *config.Config) error {
 	}
 	m, ok := su.metrics.(opmetrics.RegistryMetricer)
 	if !ok {
-		return fmt.Errorf("metrics were enabled, but metricer %T does not expose registry for metrics-server", su.metrics)
+		return fmt.Errorf("metrics were enabled, but metricer %T does not expose registry for metrics-server: %w", su.metrics, errInvalidMetricer)
 	}
 	su.log.Debug("Starting metrics server", "addr", cfg.MetricsConfig.ListenAddr, "port", cfg.MetricsConfig.ListenPort)
 	metricsSrv, err := opmetrics.StartServer(m.Registry(), cfg.MetricsConfig.ListenAddr, cfg.MetricsConfig.ListenPort)
@@ -152,24 +154,31 @@ func (su *SupervisorService) initRPCServer(cfg *config.Config) error {
 		cfg.RPC.ListenPort,
 		cfg.Version,
 		oprpc.WithLogger(su.log),
-		// oprpc.WithHTTPRecorder(su.metrics), // TODO(protocol-quest#286) hook up metrics to RPC server
+		oprpc.WithRPCRecorder(su.metrics.NewRecorder("main")),
 	)
+	RegisterRPCs(su.log, cfg, server, su.backend, su.metrics)
+	su.rpcServer = server
+	return nil
+}
+
+type RpcServer interface {
+	AddAPI(rpc.API)
+}
+
+func RegisterRPCs(logger log.Logger, cfg *config.Config, server RpcServer, backend Backend, m metrics.Metricer) {
 	if cfg.RPC.EnableAdmin {
-		su.log.Info("Admin RPC enabled")
+		logger.Info("Admin RPC enabled")
 		server.AddAPI(rpc.API{
 			Namespace:     "admin",
-			Service:       &frontend.AdminFrontend{Supervisor: su.backend},
+			Service:       &frontend.AdminFrontend{Supervisor: backend},
 			Authenticated: true, // TODO(protocol-quest#286): enforce auth on this or not?
 		})
 	}
 	server.AddAPI(rpc.API{
 		Namespace:     "supervisor",
-		Service:       &frontend.QueryFrontend{Supervisor: su.backend},
+		Service:       &frontend.QueryFrontend{Supervisor: backend},
 		Authenticated: false,
 	})
-
-	su.rpcServer = server
-	return nil
 }
 
 func (su *SupervisorService) initDBSync(ctx context.Context, cfg *config.Config) error {
@@ -177,11 +186,11 @@ func (su *SupervisorService) initDBSync(ctx context.Context, cfg *config.Config)
 		DataDir: cfg.Datadir,
 		Logger:  su.log,
 	}
-	depSet, err := cfg.DependencySetSource.LoadDependencySet(ctx)
+	cfgSet, err := cfg.FullConfigSetSource.LoadFullConfigSet(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load dependency set: %w", err)
+		return fmt.Errorf("failed to load full config set: %w", err)
 	}
-	handler, err := sync.NewServer(syncCfg, depSet.Chains())
+	handler, err := sync.NewServer(syncCfg, cfgSet.Chains())
 	if err != nil {
 		return fmt.Errorf("failed to create db sync handler: %w", err)
 	}
@@ -250,6 +259,9 @@ func (su *SupervisorService) Stopped() bool {
 
 func (su *SupervisorService) RPC() string {
 	// the RPC endpoint is assumed to be HTTP
-	// TODO(#11032): make this flexible for ws if the server supports it
 	return "http://" + su.rpcServer.Endpoint()
+}
+
+func (su *SupervisorService) Port() (int, error) {
+	return su.rpcServer.Port()
 }

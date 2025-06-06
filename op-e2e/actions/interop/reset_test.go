@@ -16,12 +16,7 @@ func TestReset(gt *testing.T) {
 
 	is := dsl.SetupInterop(t)
 	actors := is.CreateActors()
-
-	// get both sequencers set up
-	// sync the supervisor, handle initial events emitted by the nodes
-	actors.ChainA.Sequencer.ActL2PipelineFull(t)
-	actors.ChainA.Sequencer.SyncSupervisor(t)
-
+	actors.PrepareAndVerifyInitialState(t)
 	// No blocks yet
 	status := actors.ChainA.Sequencer.SyncStatus()
 	require.Equal(t, uint64(0), status.UnsafeL2.Number)

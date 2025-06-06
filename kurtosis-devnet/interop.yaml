@@ -5,6 +5,7 @@
   "op_proposer" (localDockerImage "op-proposer")
   "op_deployer" (localDockerImage "op-deployer")
   "op_supervisor" (localDockerImage "op-supervisor")
+  "op_faucet" (localDockerImage "op-faucet")
 -}}
 {{- $urls := dict
   "prestate" (localPrestate.URL)
@@ -16,25 +17,16 @@
 -}}
 ---
 optimism_package:
-  interop:
+  faucet:
     enabled: true
-    supervisor_params:
+    image: {{ $local_images.op_faucet }}
+  superchains:
+    superchain:
+      enabled: true
+  supervisors:
+    supervisor:
+      superchain: superchain
       image: {{ $local_images.op_supervisor }}
-      dependency_set: |
-        {
-          "dependencies": {
-            "2151908": {
-              "chainIndex": "2151908",
-              "activationTime": 0,
-              "historyMinTime": 0
-            },
-            "2151909": {
-              "chainIndex": "2151909",
-              "activationTime": 0,
-              "historyMinTime": 0
-            }
-          }
-        }
       extra_params:
       - {{ $flags.log_level }}
   chains:
@@ -74,17 +66,11 @@ optimism_package:
         fjord_time_offset: 0
         granite_time_offset: 0
         holocene_time_offset: 0
+        isthmus_time_offset: 0
         interop_time_offset: 0
         fund_dev_accounts: true
       batcher_params:
         image: {{ $local_images.op_batcher }}
-        extra_params:
-        - {{ $flags.log_level }}
-      challenger_params:
-        image: {{ $local_images.op_challenger }}
-        cannon_prestate_path: ""
-        cannon_prestates_url: {{ $urls.prestate }}
-        cannon_trace_types: ["cannon", "permissioned", "super-cannon"]
         extra_params:
         - {{ $flags.log_level }}
       proposer_params:
@@ -140,13 +126,6 @@ optimism_package:
         image: {{ $local_images.op_batcher }}
         extra_params:
         - {{ $flags.log_level }}
-      challenger_params:
-        image: {{ $local_images.op_challenger }}
-        cannon_prestate_path: ""
-        cannon_prestates_url: {{ $urls.prestate }}
-        cannon_trace_types: ["cannon", "permissioned", "super-cannon"]
-        extra_params:
-        - {{ $flags.log_level }}
       proposer_params:
         image: {{ $local_images.op_proposer }}
         extra_params:
@@ -158,11 +137,20 @@ optimism_package:
         builder_host: ""
         builder_port: ""
       additional_services: []
+  challengers:
+    challenger:
+      enabled: true
+      image: {{ $local_images.op_challenger }}
+      participants: "*"
+      cannon_prestates_url: {{ localPrestate.URL }}
+      cannon_trace_types: ["super-cannon", "super-permissioned"]
+      extra_params:
+      - {{ $flags.log_level }}
   op_contract_deployer_params:
     image: {{ $local_images.op_deployer }}
     l1_artifacts_locator: {{ $urls.l1_artifacts }}
     l2_artifacts_locator: {{ $urls.l2_artifacts }}
-    global_deploy_overrides:
+    overrides:
       faultGameAbsolutePrestate: {{ localPrestate.Hashes.prestate_interop }}
   global_log_level: "info"
   global_node_selectors: {}

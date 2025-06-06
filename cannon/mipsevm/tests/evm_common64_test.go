@@ -1,14 +1,14 @@
-//go:build cannon64
-// +build cannon64
-
 package tests
 
 import (
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/testutil"
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/versions"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,18 +86,13 @@ func TestEVM_SingleStep_Operators64(t *testing.T) {
 	testOperators(t, cases, false)
 }
 
+// Additional 64-bit tests
 func TestEVM_SingleStep_Bitwise64(t *testing.T) {
 	cases := []operatorTestCase{
-		{name: "and", funct: 0x24, isImm: false, rs: Word(1200), rt: Word(490), expectRes: Word(160)},                          // and t0, s1, s2
-		{name: "andi", opcode: 0xc, isImm: true, rs: Word(4), rt: Word(1), imm: uint16(40), expectRes: Word(0)},                // andi t0, s1, 40
-		{name: "or", funct: 0x25, isImm: false, rs: Word(1200), rt: Word(490), expectRes: Word(1530)},                          // or t0, s1, s2
-		{name: "ori", opcode: 0xd, isImm: true, rs: Word(4), rt: Word(1), imm: uint16(40), expectRes: Word(44)},                // ori t0, s1, 40
-		{name: "xor", funct: 0x26, isImm: false, rs: Word(1200), rt: Word(490), expectRes: Word(1370)},                         // xor t0, s1, s2
-		{name: "xori", opcode: 0xe, isImm: true, rs: Word(4), rt: Word(1), imm: uint16(40), expectRes: Word(44)},               // xori t0, s1, 40
-		{name: "nor", funct: 0x27, isImm: false, rs: Word(0x4b0), rt: Word(0x1ea), expectRes: Word(0xFF_FF_FF_FF_FF_FF_FA_05)}, // nor t0, s1, s2
-		{name: "slt", funct: 0x2a, isImm: false, rs: 0xFF_FF_FF_FE, rt: Word(5), expectRes: Word(0)},                           // slt t0, s1, s2
-		{name: "slt", funct: 0x2a, isImm: false, rs: 0xFF_FF_FF_FF_FF_FF_FF_FE, rt: Word(5), expectRes: Word(1)},               // slt t0, s1, s2
-		{name: "sltu", funct: 0x2b, isImm: false, rs: Word(1200), rt: Word(490), expectRes: Word(0)},                           // sltu t0, s1, s2
+		{name: "slt", funct: 0x2a, isImm: false, rs: 0xFF_FF_FF_FE, rt: Word(5), expectRes: Word(0)},             // slt t0, s1, s2
+		{name: "slt", funct: 0x2a, isImm: false, rs: 0xFF_FF_FF_FF_FF_FF_FF_FE, rt: Word(5), expectRes: Word(1)}, // slt t0, s1, s2
+		{name: "slti", opcode: 0xa, isImm: true, rs: 0xFF_FF_FF_FE, imm: 5, expectRes: Word(0)},                  // slt t0, s1, s2
+		{name: "slti", opcode: 0xa, isImm: true, rs: 0xFF_FF_FF_FF_FF_FF_FF_FE, imm: 5, expectRes: Word(1)},      // slt t0, s1, s2
 	}
 	testOperators(t, cases, false)
 }
@@ -149,36 +144,38 @@ func TestEVM_SingleStep_Shift64(t *testing.T) {
 		{name: "dsra32", funct: 0x3f, rd: Word(0xAA_BB_CC_DD_A1_B1_C1_D1), rt: Word(0x7F_FF_FF_FF_FF_FF_FF_FF), sa: 31, expectRes: Word(0x0)},                      // dsra32 t8, s2, 1
 	}
 
-	v := GetMultiThreadedTestCase(t)
 	for i, tt := range cases {
-		testName := fmt.Sprintf("%v %v", v.Name, tt.name)
-		t.Run(testName, func(t *testing.T) {
-			pc := Word(0x0)
-			goVm := v.VMFactory(nil, os.Stdout, os.Stderr, testutil.CreateLogger(), testutil.WithRandomization(int64(i)), testutil.WithPCAndNextPC(pc))
-			state := goVm.GetState()
-			var insn uint32
-			var rtReg uint32
-			var rdReg uint32
-			rtReg = 18
-			rdReg = 8
-			insn = rtReg<<16 | rdReg<<11 | tt.sa<<6 | tt.funct
-			state.GetRegistersRef()[rdReg] = tt.rd
-			state.GetRegistersRef()[rtReg] = tt.rt
-			testutil.StoreInstruction(state.GetMemory(), pc, insn)
-			step := state.GetStep()
+		for _, v := range GetMipsVersionTestCases(t) {
+			v := v
+			testName := fmt.Sprintf("%v %v", v.Name, tt.name)
+			t.Run(testName, func(t *testing.T) {
+				pc := Word(0x0)
+				goVm := v.VMFactory(nil, os.Stdout, os.Stderr, testutil.CreateLogger(), testutil.WithRandomization(int64(i)), testutil.WithPCAndNextPC(pc))
+				state := goVm.GetState()
+				var insn uint32
+				var rtReg uint32
+				var rdReg uint32
+				rtReg = 18
+				rdReg = 8
+				insn = rtReg<<16 | rdReg<<11 | tt.sa<<6 | tt.funct
+				state.GetRegistersRef()[rdReg] = tt.rd
+				state.GetRegistersRef()[rtReg] = tt.rt
+				testutil.StoreInstruction(state.GetMemory(), pc, insn)
+				step := state.GetStep()
 
-			// Setup expectations
-			expected := testutil.NewExpectedState(state)
-			expected.ExpectStep()
-			expected.Registers[rdReg] = tt.expectRes
+				// Setup expectations
+				expected := testutil.NewExpectedState(state)
+				expected.ExpectStep()
+				expected.Registers[rdReg] = tt.expectRes
 
-			stepWitness, err := goVm.Step(true)
-			require.NoError(t, err)
+				stepWitness, err := goVm.Step(true)
+				require.NoError(t, err)
 
-			// Check expectations
-			expected.Validate(t, state)
-			testutil.ValidateEVM(t, stepWitness, step, goVm, v.StateHashFn, v.Contracts)
-		})
+				// Check expectations
+				expected.Validate(t, state)
+				testutil.ValidateEVM(t, stepWitness, step, goVm, v.StateHashFn, v.Contracts)
+			})
+		}
 	}
 }
 
@@ -513,4 +510,74 @@ func TestEVM_SingleStep_Branch64(t *testing.T) {
 	}
 
 	testBranch(t, cases)
+}
+
+func TestEVM_SingleStep_DCloDClz64(t *testing.T) {
+	rsReg := uint32(7)
+	rdReg := uint32(8)
+	cases := []struct {
+		name           string
+		rs             Word
+		funct          uint32
+		expectedResult Word
+	}{
+		// dclo
+		{name: "dclo", rs: Word(0xFF_FF_FF_FF_FF_FF_FF_FF), expectedResult: Word(64), funct: 0b10_0101},
+		{name: "dclo", rs: Word(0xFF_FF_FF_FF_FF_FF_FF_FE), expectedResult: Word(63), funct: 0b10_0101},
+		{name: "dclo", rs: Word(0xFF_FF_FF_FF_00_00_00_00), expectedResult: Word(32), funct: 0b10_0101},
+		{name: "dclo", rs: Word(0x80_00_00_00_00_00_00_00), expectedResult: Word(1), funct: 0b10_0101},
+		{name: "dclo", rs: Word(0x0), expectedResult: Word(0), funct: 0b10_0101},
+		// dclz
+		{name: "dclz", rs: Word(0x0), expectedResult: Word(64), funct: 0b10_0100},
+		{name: "dclz", rs: Word(0x1), expectedResult: Word(63), funct: 0b10_0100},
+		{name: "dclz", rs: Word(0x10_00_00_00), expectedResult: Word(35), funct: 0b10_0100},
+		{name: "dclz", rs: Word(0x80_00_00_00), expectedResult: Word(32), funct: 0b10_0100},
+		{name: "dclz", rs: Word(0x80_00_00_00_00_00_00_00), expectedResult: Word(0), funct: 0b10_0100},
+	}
+
+	vmVersions := GetMipsVersionTestCases(t)
+	require.True(t, slices.ContainsFunc(vmVersions, func(v VersionedVMTestCase) bool {
+		features := versions.FeaturesForVersion(v.Version)
+		return features.SupportDclzDclo
+	}), "dclz/dclo feature not tested")
+
+	for _, v := range vmVersions {
+		for i, tt := range cases {
+			testName := fmt.Sprintf("%v (%v)", tt.name, v.Name)
+			t.Run(testName, func(t *testing.T) {
+				// Set up state
+				goVm := v.VMFactory(nil, os.Stdout, os.Stderr, testutil.CreateLogger(), testutil.WithRandomization(int64(i)))
+				state := goVm.GetState()
+				insn := 0b01_1100<<26 | rsReg<<21 | rdReg<<11 | tt.funct
+				testutil.StoreInstruction(state.GetMemory(), state.GetPC(), insn)
+				state.GetRegistersRef()[rsReg] = tt.rs
+				step := state.GetStep()
+
+				features := versions.FeaturesForVersion(v.Version)
+				if features.SupportDclzDclo {
+					expected := testutil.NewExpectedState(state)
+					expected.ExpectStep()
+					expected.Registers[rdReg] = tt.expectedResult
+					stepWitness, err := goVm.Step(true)
+					require.NoError(t, err)
+					expected.Validate(t, state)
+					testutil.ValidateEVM(t, stepWitness, step, goVm, v.StateHashFn, v.Contracts)
+				} else {
+					assertUnsupportedInstruction(t, v, insn, goVm)
+				}
+			})
+		}
+	}
+}
+
+func assertUnsupportedInstruction(t *testing.T, versionedTestCase VersionedVMTestCase, insn uint32, goVm mipsevm.FPVM) {
+	state := goVm.GetState()
+	proofData := versionedTestCase.ProofGenerator(t, goVm.GetState())
+	goPanicMsg := fmt.Sprintf("invalid instruction: %x", insn)
+	require.PanicsWithValue(t, goPanicMsg, func() {
+		_, _ = goVm.Step(
+			false)
+	})
+	errMsg := testutil.CreateErrorStringMatcher("invalid instruction")
+	testutil.AssertEVMReverts(t, state, versionedTestCase.Contracts, nil, proofData, errMsg)
 }

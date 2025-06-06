@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-service/testutils/devnet"
 
 	altda "github.com/ethereum-optimism/optimism/op-alt-da"
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/inspect"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
@@ -23,12 +24,14 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	op_e2e "github.com/ethereum-optimism/optimism/op-e2e"
 
 	"github.com/holiman/uint256"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/devkeys"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-service/predeploys"
@@ -49,6 +52,74 @@ func (d *deployerKey) HDPath() string {
 
 func (d *deployerKey) String() string {
 	return "deployer-key"
+}
+
+func TestLiveChain(t *testing.T) {
+	t.Skip("requires backport")
+
+	op_e2e.InitParallel(t)
+
+	for _, network := range []string{"mainnet", "sepolia"} {
+		t.Run(network, func(t *testing.T) {
+			testLiveChainNetwork(t, network)
+		})
+	}
+}
+
+func testLiveChainNetwork(t *testing.T, network string) {
+	op_e2e.InitParallel(t)
+	lgr := testlog.Logger(t, slog.LevelInfo)
+	rpcURL := os.Getenv(fmt.Sprintf("%s_RPC_URL", strings.ToUpper(network)))
+	require.NotEmpty(t, rpcURL)
+
+	forkedL1, cleanup, err := devnet.NewForked(lgr, rpcURL)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cleanup())
+	})
+
+	l1Client, err := ethclient.Dial(forkedL1.RPCUrl())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l1ChainID, err := l1Client.ChainID(ctx)
+	require.NoError(t, err)
+
+	pk, err := crypto.HexToECDSA("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+	require.NoError(t, err)
+	dk, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
+	require.NoError(t, err)
+
+	testCacheDir := testutils.IsolatedTestDirWithAutoCleanup(t)
+
+	intent, st := newIntent(
+		t,
+		l1ChainID,
+		dk,
+		uint256.NewInt(9999),
+		artifacts.DefaultL1ContractsLocator,
+		artifacts.DefaultL2ContractsLocator,
+	)
+	cg := ethClientCodeGetter(ctx, l1Client)
+
+	require.NoError(t, deployer.ApplyPipeline(
+		ctx,
+		deployer.ApplyPipelineOpts{
+			DeploymentTarget:   deployer.DeploymentTargetLive,
+			L1RPCUrl:           forkedL1.RPCUrl(),
+			DeployerPrivateKey: pk,
+			Intent:             intent,
+			State:              st,
+			Logger:             lgr,
+			StateWriter:        pipeline.NoopStateWriter(),
+			CacheDir:           testCacheDir,
+		},
+	))
+
+	validateSuperchainDeployment(t, st, cg, false)
+	validateOPChainDeployment(t, cg, st, intent, false)
 }
 
 func TestEndToEndApply(t *testing.T) {
@@ -81,6 +152,8 @@ func TestEndToEndApply(t *testing.T) {
 
 	loc, _ := testutil.LocalArtifacts(t)
 
+	testCacheDir := testutils.IsolatedTestDirWithAutoCleanup(t)
+
 	t.Run("two chains one after another", func(t *testing.T) {
 		intent, st := newIntent(t, l1ChainID, dk, l2ChainID1, loc, loc)
 		cg := ethClientCodeGetter(ctx, l1Client)
@@ -95,6 +168,7 @@ func TestEndToEndApply(t *testing.T) {
 				State:              st,
 				Logger:             lgr,
 				StateWriter:        pipeline.NoopStateWriter(),
+				CacheDir:           testCacheDir,
 			},
 		))
 
@@ -112,19 +186,22 @@ func TestEndToEndApply(t *testing.T) {
 				State:              st,
 				Logger:             lgr,
 				StateWriter:        pipeline.NoopStateWriter(),
+				CacheDir:           testCacheDir,
 			},
 		))
 
-		validateSuperchainDeployment(t, st, cg)
+		validateSuperchainDeployment(t, st, cg, true)
 		validateOPChainDeployment(t, cg, st, intent, false)
 	})
 
 	t.Run("chain with tagged artifacts", func(t *testing.T) {
+		t.Skip("requires backport")
 		intent, st := newIntent(t, l1ChainID, dk, l2ChainID1, loc, loc)
 		intent.L1ContractsLocator = artifacts.DefaultL1ContractsLocator
 		intent.L2ContractsLocator = artifacts.DefaultL2ContractsLocator
+		cg := ethClientCodeGetter(ctx, l1Client)
 
-		require.ErrorIs(t, deployer.ApplyPipeline(
+		require.NoError(t, deployer.ApplyPipeline(
 			ctx,
 			deployer.ApplyPipelineOpts{
 				DeploymentTarget:   deployer.DeploymentTargetLive,
@@ -134,12 +211,17 @@ func TestEndToEndApply(t *testing.T) {
 				State:              st,
 				Logger:             lgr,
 				StateWriter:        pipeline.NoopStateWriter(),
+				CacheDir:           testCacheDir,
 			},
-		), pipeline.ErrRefusingToDeployTaggedReleaseWithoutOPCM)
+		))
+
+		validateSuperchainDeployment(t, st, cg, true)
+		validateOPChainDeployment(t, cg, st, intent, false)
 	})
 
-	t.Run("with calldata broadcasts", func(t *testing.T) {
+	t.Run("with calldata broadcasts and prestate generation", func(t *testing.T) {
 		intent, st := newIntent(t, l1ChainID, dk, l2ChainID1, loc, loc)
+		mockPreStateBuilder := devnet.NewMockPreStateBuilder()
 
 		require.NoError(t, deployer.ApplyPipeline(
 			ctx,
@@ -151,10 +233,19 @@ func TestEndToEndApply(t *testing.T) {
 				State:              st,
 				Logger:             lgr,
 				StateWriter:        pipeline.NoopStateWriter(),
+				CacheDir:           testCacheDir,
+				PreStateBuilder:    mockPreStateBuilder,
 			},
 		))
 
 		require.Greater(t, len(st.DeploymentCalldata), 0)
+		require.Equal(t, 1, mockPreStateBuilder.Invocations())
+		require.Equal(t, len(intent.Chains), mockPreStateBuilder.LastOptsCount())
+		require.NotNil(t, st.PrestateManifest)
+		for _, val := range *st.PrestateManifest {
+			_, err := hexutil.Decode(val) // the not-empty val check is covered here as well
+			require.NoError(t, err)
+		}
 	})
 }
 
@@ -203,7 +294,7 @@ func TestGlobalOverrides(t *testing.T) {
 	require.Equal(t, expectedEnableGovernance, cfg.L2InitializationConfig.GovernanceDeployConfig.EnableGovernance, "Governance should be disabled")
 	require.Equal(t, expectedGasPriceOracleBaseFeeScalar, cfg.L2InitializationConfig.GasPriceOracleDeployConfig.GasPriceOracleBaseFeeScalar, "Gas Price Oracle Base Fee Scalar should be the expected value")
 	require.Equal(t, expectedEIP1559Denominator, cfg.L2InitializationConfig.EIP1559DeployConfig.EIP1559Denominator, "EIP-1559 Denominator should be the expected value")
-	require.Equal(t, expectedUseFaultProofs, cfg.L2InitializationConfig.UseInterop, "Fault proofs should be enabled")
+	require.Equal(t, expectedUseFaultProofs, cfg.UseFaultProofs, "Fault proofs should not be enabled")
 }
 
 func TestApplyGenesisStrategy(t *testing.T) {
@@ -212,18 +303,44 @@ func TestApplyGenesisStrategy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	opts, intent, st := setupGenesisChain(t, defaultL1ChainID)
-
-	require.NoError(t, deployer.ApplyPipeline(ctx, opts))
-
-	cg := stateDumpCodeGetter(st)
-	validateSuperchainDeployment(t, st, cg)
-
-	for i := range intent.Chains {
-		t.Run(fmt.Sprintf("chain-%d", i), func(t *testing.T) {
-			validateOPChainDeployment(t, cg, st, intent, false)
-		})
+	pragueOffset := uint64(2000)
+	l1GenesisParams := &state.L1DevGenesisParams{
+		BlockParams: state.L1DevGenesisBlockParams{
+			Timestamp:     1000,
+			GasLimit:      42_000_000,
+			ExcessBlobGas: 9000,
+		},
+		PragueTimeOffset: &pragueOffset,
 	}
+
+	deployChain := func(l1DevGenesisParams *state.L1DevGenesisParams) *state.State {
+		opts, intent, st := setupGenesisChain(t, defaultL1ChainID)
+		intent.L1DevGenesisParams = l1DevGenesisParams
+		require.NoError(t, deployer.ApplyPipeline(ctx, opts))
+		cg := stateDumpCodeGetter(st)
+		validateSuperchainDeployment(t, st, cg, true)
+		validateOPChainDeployment(t, cg, st, intent, false)
+		return st
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		st := deployChain(nil)
+		require.Greater(t, st.Chains[0].StartBlock.Time, l1GenesisParams.BlockParams.Timestamp)
+		require.Nil(t, st.L1DevGenesis.Config.PragueTime)
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		st := deployChain(l1GenesisParams)
+		require.EqualValues(t, l1GenesisParams.BlockParams.Timestamp, st.Chains[0].StartBlock.Time)
+		require.EqualValues(t, l1GenesisParams.BlockParams.Timestamp, st.L1DevGenesis.Timestamp)
+
+		require.EqualValues(t, l1GenesisParams.BlockParams.GasLimit, st.L1DevGenesis.GasLimit)
+		require.NotNil(t, st.L1DevGenesis.ExcessBlobGas)
+		require.EqualValues(t, l1GenesisParams.BlockParams.ExcessBlobGas, *st.L1DevGenesis.ExcessBlobGas)
+		require.NotNil(t, st.L1DevGenesis.Config.PragueTime)
+		expectedPragueTimestamp := l1GenesisParams.BlockParams.Timestamp + *l1GenesisParams.PragueTimeOffset
+		require.EqualValues(t, expectedPragueTimestamp, *st.L1DevGenesis.Config.PragueTime)
+	})
 }
 
 func TestProofParamOverrides(t *testing.T) {
@@ -239,7 +356,7 @@ func TestProofParamOverrides(t *testing.T) {
 		"preimageOracleChallengePeriod":           standard.ChallengePeriodSeconds + 1,
 		"proofMaturityDelaySeconds":               standard.ProofMaturityDelaySeconds + 1,
 		"disputeGameFinalityDelaySeconds":         standard.DisputeGameFinalityDelaySeconds + 1,
-		"mipsVersion":                             standard.MIPSVersion + 1,
+		"mipsVersion":                             standard.MIPSVersion,     // Contract enforces a valid value be used
 		"respectedGameType":                       standard.DisputeGameType, // This must be set to the permissioned game
 		"faultGameAbsolutePrestate":               common.Hash{'A', 'B', 'S', 'O', 'L', 'U', 'T', 'E'},
 		"faultGameMaxDepth":                       standard.DisputeMaxGameDepth + 1,
@@ -266,54 +383,54 @@ func TestProofParamOverrides(t *testing.T) {
 		{
 			"faultGameWithdrawalDelay",
 			uint64Caster,
-			st.ImplementationsDeployment.DelayedWETHImplAddress,
+			st.ImplementationsDeployment.DelayedWethImpl,
 		},
 		{
 			"preimageOracleMinProposalSize",
 			uint64Caster,
-			st.ImplementationsDeployment.PreimageOracleSingletonAddress,
+			st.ImplementationsDeployment.PreimageOracleImpl,
 		},
 		{
 			"preimageOracleChallengePeriod",
 			uint64Caster,
-			st.ImplementationsDeployment.PreimageOracleSingletonAddress,
+			st.ImplementationsDeployment.PreimageOracleImpl,
 		},
 		{
 			"proofMaturityDelaySeconds",
 			uint64Caster,
-			st.ImplementationsDeployment.OptimismPortalImplAddress,
+			st.ImplementationsDeployment.OptimismPortalImpl,
 		},
 		{
 			"disputeGameFinalityDelaySeconds",
 			uint64Caster,
-			st.ImplementationsDeployment.OptimismPortalImplAddress,
+			st.ImplementationsDeployment.AnchorStateRegistryImpl,
 		},
 		{
 			"faultGameAbsolutePrestate",
 			func(t *testing.T, val any) common.Hash {
 				return val.(common.Hash)
 			},
-			chainState.PermissionedDisputeGameAddress,
+			chainState.PermissionedDisputeGameImpl,
 		},
 		{
 			"faultGameMaxDepth",
 			uint64Caster,
-			chainState.PermissionedDisputeGameAddress,
+			chainState.PermissionedDisputeGameImpl,
 		},
 		{
 			"faultGameSplitDepth",
 			uint64Caster,
-			chainState.PermissionedDisputeGameAddress,
+			chainState.PermissionedDisputeGameImpl,
 		},
 		{
 			"faultGameClockExtension",
 			uint64Caster,
-			chainState.PermissionedDisputeGameAddress,
+			chainState.PermissionedDisputeGameImpl,
 		},
 		{
 			"faultGameMaxClockDuration",
 			uint64Caster,
-			chainState.PermissionedDisputeGameAddress,
+			chainState.PermissionedDisputeGameImpl,
 		},
 	}
 	for _, tt := range tests {
@@ -321,24 +438,6 @@ func TestProofParamOverrides(t *testing.T) {
 			checkImmutable(t, allocs, tt.address, tt.caster(t, intent.GlobalDeployOverrides[tt.name]))
 		})
 	}
-}
-
-func TestInteropDeployment(t *testing.T) {
-	op_e2e.InitParallel(t)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	opts, intent, st := setupGenesisChain(t, defaultL1ChainID)
-	intent.UseInterop = true
-
-	require.NoError(t, deployer.ApplyPipeline(ctx, opts))
-
-	chainState := st.Chains[0]
-	depManagerSlot := common.HexToHash("0x1708e077affb93e89be2665fb0fb72581be66f84dc00d25fed755ae911905b1c")
-	checkImmutable(t, st.L1StateDump.Data.Accounts, st.ImplementationsDeployment.SystemConfigImplAddress, depManagerSlot)
-	proxyAdminOwnerHash := common.BytesToHash(intent.Chains[0].Roles.SystemConfigOwner.Bytes())
-	checkStorageSlot(t, st.L1StateDump.Data.Accounts, chainState.SystemConfigProxyAddress, depManagerSlot, proxyAdminOwnerHash)
 }
 
 func TestAltDADeployment(t *testing.T) {
@@ -361,15 +460,15 @@ func TestAltDADeployment(t *testing.T) {
 	require.NoError(t, deployer.ApplyPipeline(ctx, opts))
 
 	chainState := st.Chains[0]
-	require.NotEmpty(t, chainState.DataAvailabilityChallengeProxyAddress)
-	require.NotEmpty(t, chainState.DataAvailabilityChallengeImplAddress)
+	require.NotEmpty(t, chainState.AltDAChallengeProxy)
+	require.NotEmpty(t, chainState.AltDAChallengeImpl)
 
-	_, rollupCfg, err := inspect.GenesisAndRollup(st, chainState.ID)
+	_, rollupCfg, err := pipeline.RenderGenesisAndRollup(st, chainState.ID, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, &rollup.AltDAConfig{
 		CommitmentType:     altda.KeccakCommitmentString,
 		DAChallengeWindow:  altDACfg.DAChallengeWindow,
-		DAChallengeAddress: chainState.DataAvailabilityChallengeProxyAddress,
+		DAChallengeAddress: chainState.AltDAChallengeProxy,
 		DAResolveWindow:    altDACfg.DAResolveWindow,
 	}, rollupCfg.AltDAConfig)
 }
@@ -428,9 +527,13 @@ func TestInvalidL2Genesis(t *testing.T) {
 			opts, intent, _ := setupGenesisChain(t, defaultL1ChainID)
 			intent.GlobalDeployOverrides = tt.overrides
 
+			mockPreStateBuilder := devnet.NewMockPreStateBuilder()
+			opts.PreStateBuilder = mockPreStateBuilder
+
 			err := deployer.ApplyPipeline(ctx, opts)
 			require.Error(t, err)
 			require.ErrorContains(t, err, "failed to combine L2 init config")
+			require.Equal(t, 0, mockPreStateBuilder.Invocations())
 		})
 	}
 }
@@ -444,7 +547,7 @@ func TestAdditionalDisputeGames(t *testing.T) {
 	opts, intent, st := setupGenesisChain(t, defaultL1ChainID)
 	deployerAddr := crypto.PubkeyToAddress(opts.DeployerPrivateKey.PublicKey)
 	(&intent.Chains[0].Roles).L1ProxyAdminOwner = deployerAddr
-	intent.SuperchainRoles.Guardian = deployerAddr
+	intent.SuperchainRoles.SuperchainGuardian = deployerAddr
 	intent.GlobalDeployOverrides = map[string]any{
 		"challengePeriodSeconds": 1,
 	}
@@ -476,7 +579,7 @@ func TestAdditionalDisputeGames(t *testing.T) {
 	require.NotEmpty(t, gameInfo.VMAddress)
 	require.NotEmpty(t, gameInfo.GameAddress)
 	require.NotEmpty(t, gameInfo.OracleAddress)
-	require.NotEqual(t, st.ImplementationsDeployment.PreimageOracleSingletonAddress, gameInfo.OracleAddress)
+	require.NotEqual(t, st.ImplementationsDeployment.PreimageOracleImpl, gameInfo.OracleAddress)
 }
 
 func TestIntentConfiguration(t *testing.T) {
@@ -550,6 +653,8 @@ func setupGenesisChain(t *testing.T, l1ChainID uint64) (deployer.ApplyPipelineOp
 
 	intent, st := newIntent(t, l1ChainIDBig, dk, l2ChainID1, loc, loc)
 
+	testCacheDir := testutils.IsolatedTestDirWithAutoCleanup(t)
+
 	opts := deployer.ApplyPipelineOpts{
 		DeploymentTarget:   deployer.DeploymentTargetGenesis,
 		DeployerPrivateKey: priv,
@@ -557,6 +662,7 @@ func setupGenesisChain(t *testing.T, l1ChainID uint64) (deployer.ApplyPipelineOp
 		State:              st,
 		Logger:             lgr,
 		StateWriter:        pipeline.NoopStateWriter(),
+		CacheDir:           testCacheDir,
 	}
 
 	return opts, intent, st
@@ -577,12 +683,12 @@ func newIntent(
 	l2Loc *artifacts.Locator,
 ) (*state.Intent, *state.State) {
 	intent := &state.Intent{
-		ConfigType: state.IntentConfigTypeCustom,
+		ConfigType: state.IntentTypeCustom,
 		L1ChainID:  l1ChainID.Uint64(),
-		SuperchainRoles: &state.SuperchainRoles{
-			ProxyAdminOwner:       addrFor(t, dk, devkeys.L1ProxyAdminOwnerRole.Key(l1ChainID)),
-			ProtocolVersionsOwner: addrFor(t, dk, devkeys.SuperchainDeployerKey.Key(l1ChainID)),
-			Guardian:              addrFor(t, dk, devkeys.SuperchainConfigGuardianKey.Key(l1ChainID)),
+		SuperchainRoles: &addresses.SuperchainRoles{
+			SuperchainProxyAdminOwner: addrFor(t, dk, devkeys.L1ProxyAdminOwnerRole.Key(l1ChainID)),
+			ProtocolVersionsOwner:     addrFor(t, dk, devkeys.SuperchainDeployerKey.Key(l1ChainID)),
+			SuperchainGuardian:        addrFor(t, dk, devkeys.SuperchainConfigGuardianKey.Key(l1ChainID)),
 		},
 		FundDevAccounts:    false,
 		L1ContractsLocator: l1Loc,
@@ -636,20 +742,25 @@ func stateDumpCodeGetter(st *state.State) codeGetter {
 	}
 }
 
-func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter) {
-	addrs := []struct {
+func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter, includeSuperchainImpls bool) {
+	type addrTuple struct {
 		name string
 		addr common.Address
-	}{
-		{"SuperchainProxyAdmin", st.SuperchainDeployment.ProxyAdminAddress},
-		{"SuperchainConfigProxy", st.SuperchainDeployment.SuperchainConfigProxyAddress},
-		{"SuperchainConfigImpl", st.SuperchainDeployment.SuperchainConfigImplAddress},
-		{"ProtocolVersionsProxy", st.SuperchainDeployment.ProtocolVersionsProxyAddress},
-		{"ProtocolVersionsImpl", st.SuperchainDeployment.ProtocolVersionsImplAddress},
-		{"Opcm", st.ImplementationsDeployment.OpcmAddress},
-		{"PreimageOracleSingleton", st.ImplementationsDeployment.PreimageOracleSingletonAddress},
-		{"MipsSingleton", st.ImplementationsDeployment.MipsSingletonAddress},
 	}
+	addrs := []addrTuple{
+		{"SuperchainProxyAdminImpl", st.SuperchainDeployment.SuperchainProxyAdminImpl},
+		{"SuperchainConfigProxy", st.SuperchainDeployment.SuperchainConfigProxy},
+		{"ProtocolVersionsProxy", st.SuperchainDeployment.ProtocolVersionsProxy},
+		{"OpcmImpl", st.ImplementationsDeployment.OpcmImpl},
+		{"PreimageOracleImpl", st.ImplementationsDeployment.PreimageOracleImpl},
+		{"MipsImpl", st.ImplementationsDeployment.MipsImpl},
+	}
+
+	if includeSuperchainImpls {
+		addrs = append(addrs, addrTuple{"SuperchainConfigImpl", st.SuperchainDeployment.SuperchainConfigImpl})
+		addrs = append(addrs, addrTuple{"ProtocolVersionsImpl", st.SuperchainDeployment.ProtocolVersionsImpl})
+	}
+
 	for _, addr := range addrs {
 		t.Run(addr.name, func(t *testing.T) {
 			code := cg(t, addr.addr)
@@ -661,21 +772,27 @@ func validateSuperchainDeployment(t *testing.T, st *state.State, cg codeGetter) 
 func validateOPChainDeployment(t *testing.T, cg codeGetter, st *state.State, intent *state.Intent, govEnabled bool) {
 	// Validate that the implementation addresses are always set, even in subsequent deployments
 	// that pull from an existing OPCM deployment.
-	implAddrs := []struct {
+	type addrTuple struct {
 		name string
 		addr common.Address
-	}{
-		{"DelayedWETHImplAddress", st.ImplementationsDeployment.DelayedWETHImplAddress},
-		{"OptimismPortalImplAddress", st.ImplementationsDeployment.OptimismPortalImplAddress},
-		{"SystemConfigImplAddress", st.ImplementationsDeployment.SystemConfigImplAddress},
-		{"L1CrossDomainMessengerImplAddress", st.ImplementationsDeployment.L1CrossDomainMessengerImplAddress},
-		{"L1ERC721BridgeImplAddress", st.ImplementationsDeployment.L1ERC721BridgeImplAddress},
-		{"L1StandardBridgeImplAddress", st.ImplementationsDeployment.L1StandardBridgeImplAddress},
-		{"OptimismMintableERC20FactoryImplAddress", st.ImplementationsDeployment.OptimismMintableERC20FactoryImplAddress},
-		{"DisputeGameFactoryImplAddress", st.ImplementationsDeployment.DisputeGameFactoryImplAddress},
-		{"MipsSingletonAddress", st.ImplementationsDeployment.MipsSingletonAddress},
-		{"PreimageOracleSingletonAddress", st.ImplementationsDeployment.PreimageOracleSingletonAddress},
 	}
+	implAddrs := []addrTuple{
+		{"DelayedWethImpl", st.ImplementationsDeployment.DelayedWethImpl},
+		{"OptimismPortalImpl", st.ImplementationsDeployment.OptimismPortalImpl},
+		{"SystemConfigImpl", st.ImplementationsDeployment.SystemConfigImpl},
+		{"L1CrossDomainMessengerImpl", st.ImplementationsDeployment.L1CrossDomainMessengerImpl},
+		{"L1ERC721BridgeImpl", st.ImplementationsDeployment.L1Erc721BridgeImpl},
+		{"L1StandardBridgeImpl", st.ImplementationsDeployment.L1StandardBridgeImpl},
+		{"OptimismMintableERC20FactoryImpl", st.ImplementationsDeployment.OptimismMintableErc20FactoryImpl},
+		{"DisputeGameFactoryImpl", st.ImplementationsDeployment.DisputeGameFactoryImpl},
+		{"MipsImpl", st.ImplementationsDeployment.MipsImpl},
+		{"PreimageOracleImpl", st.ImplementationsDeployment.PreimageOracleImpl},
+	}
+
+	if !intent.L1ContractsLocator.IsTag() {
+		implAddrs = append(implAddrs, addrTuple{"EthLockboxImpl", st.ImplementationsDeployment.EthLockboxImpl})
+	}
+
 	for _, addr := range implAddrs {
 		require.NotEmpty(t, addr.addr, "%s should be set", addr.name)
 		code := cg(t, addr.addr)
@@ -687,19 +804,19 @@ func validateOPChainDeployment(t *testing.T, cg codeGetter, st *state.State, int
 			name string
 			addr common.Address
 		}{
-			{"ProxyAdminAddress", chainState.ProxyAdminAddress},
-			{"AddressManagerAddress", chainState.AddressManagerAddress},
-			{"L1ERC721BridgeProxyAddress", chainState.L1ERC721BridgeProxyAddress},
-			{"SystemConfigProxyAddress", chainState.SystemConfigProxyAddress},
-			{"OptimismMintableERC20FactoryProxyAddress", chainState.OptimismMintableERC20FactoryProxyAddress},
-			{"L1StandardBridgeProxyAddress", chainState.L1StandardBridgeProxyAddress},
-			{"L1CrossDomainMessengerProxyAddress", chainState.L1CrossDomainMessengerProxyAddress},
-			{"OptimismPortalProxyAddress", chainState.OptimismPortalProxyAddress},
-			{"DisputeGameFactoryProxyAddress", chainState.DisputeGameFactoryProxyAddress},
-			{"AnchorStateRegistryProxyAddress", chainState.AnchorStateRegistryProxyAddress},
-			{"FaultDisputeGameAddress", chainState.FaultDisputeGameAddress},
-			{"PermissionedDisputeGameAddress", chainState.PermissionedDisputeGameAddress},
-			{"DelayedWETHPermissionedGameProxyAddress", chainState.DelayedWETHPermissionedGameProxyAddress},
+			{"ProxyAdminAddress", chainState.OpChainContracts.OpChainProxyAdminImpl},
+			{"AddressManagerAddress", chainState.OpChainContracts.AddressManagerImpl},
+			{"L1ERC721BridgeProxyAddress", chainState.OpChainContracts.L1Erc721BridgeProxy},
+			{"SystemConfigProxyAddress", chainState.OpChainContracts.SystemConfigProxy},
+			{"OptimismMintableERC20FactoryProxyAddress", chainState.OpChainContracts.OptimismMintableErc20FactoryProxy},
+			{"L1StandardBridgeProxyAddress", chainState.OpChainContracts.L1StandardBridgeProxy},
+			{"L1CrossDomainMessengerProxyAddress", chainState.OpChainContracts.L1CrossDomainMessengerProxy},
+			{"OptimismPortalProxyAddress", chainState.OpChainContracts.OptimismPortalProxy},
+			{"DisputeGameFactoryProxyAddress", chainState.DisputeGameFactoryProxy},
+			{"AnchorStateRegistryProxyAddress", chainState.OpChainContracts.AnchorStateRegistryProxy},
+			{"FaultDisputeGameAddress", chainState.OpChainContracts.FaultDisputeGameImpl},
+			{"PermissionedDisputeGameAddress", chainState.OpChainContracts.PermissionedDisputeGameImpl},
+			{"DelayedWETHPermissionedGameProxyAddress", chainState.OpChainContracts.DelayedWethPermissionedGameProxy},
 			// {"DelayedWETHPermissionlessGameProxyAddress", chainState.DelayedWETHPermissionlessGameProxyAddress},
 		}
 		for _, addr := range chainAddrs {

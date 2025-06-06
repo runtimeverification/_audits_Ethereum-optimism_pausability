@@ -8,11 +8,20 @@ var (
 	ErrOutOfOrder = errors.New("data out of order")
 	// ErrDataCorruption happens when the underlying DB has some I/O issue
 	ErrDataCorruption = errors.New("data corruption")
+	// ErrNotExact happens when we search the DB, know the data may be there, but is not (e.g. different revision)
+	ErrNotExact = errors.New("missed data")
 	// ErrSkipped happens when we try to retrieve data that is not available (pruned)
 	// It may also happen if we erroneously skip data, that was not considered a conflict, if the DB is corrupted.
 	ErrSkipped = errors.New("skipped data")
 	// ErrFuture happens when data is just not yet available
 	ErrFuture = errors.New("future data")
+	// ErrInvalidatedRead happens when something was assumed from the DB, but then invalidated due to e.g. a reorg.
+	ErrInvalidatedRead = errors.New("invalidated read")
+	// ErrAlreadyInvalidatingRead happens when something is being invalidated,
+	// and something else attempts to invalidate at the same time.
+	ErrAlreadyInvalidatingRead = errors.New("already invalidating read")
+	// ErrRewindFailed happens when we fail to rewind the chain (reorg response).
+	ErrRewindFailed = errors.New("rewind failed")
 	// ErrIneffective happens when data is accepted as compatible, but did not change anything.
 	// This happens when a node is deriving an L2 block we already know of being derived from the given source,
 	// but without path to skip forward to newer source blocks without doing the known derivation work first.

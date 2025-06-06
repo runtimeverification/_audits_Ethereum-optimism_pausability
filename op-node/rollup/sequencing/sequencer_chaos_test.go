@@ -107,9 +107,11 @@ func (c *ChaoticEngine) OnEvent(ev event.Event) bool {
 		c.currentPayloadInfo = eth.PayloadInfo{}
 		c.currentAttributes = nil
 		c.emitter.Emit(engine.EngineResetConfirmedEvent{
-			Unsafe:    c.unsafe,
-			Safe:      c.safe,
-			Finalized: c.finalized,
+			LocalUnsafe: c.unsafe,
+			CrossUnsafe: c.unsafe,
+			LocalSafe:   c.safe,
+			CrossSafe:   c.safe,
+			Finalized:   c.finalized,
 		})
 	case engine.BuildInvalidEvent:
 		// Engine translates the internal BuildInvalidEvent event
@@ -260,15 +262,8 @@ func testSequencerChaosWithSeed(t *testing.T, seed int64) {
 	ex := event.NewGlobalSynchronous(context.Background())
 	sys := event.NewSystem(logger, ex)
 	sys.AddTracer(event.NewLogTracer(logger, log.LevelInfo))
-
-	opts := &event.RegisterOpts{
-		Executor: event.ExecutorOpts{
-			Capacity: 200,
-		},
-		Emitter: event.EmitterOpts{
-			Limiting: false, // We're rapidly simulating with fake clock, so don't rate-limit
-		},
-	}
+	// We're rapidly simulating with fake clock, so don't rate-limit
+	opts := event.WithNoEmitLimiter()
 	sys.Register("sequencer", seq, opts)
 
 	rng := rand.New(rand.NewSource(seed))

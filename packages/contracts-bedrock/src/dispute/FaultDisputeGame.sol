@@ -17,7 +17,7 @@ import {
     Duration,
     Timestamp,
     Hash,
-    OutputRoot,
+    Proposal,
     LibClock,
     LocalPreimageKey,
     VMStatuses
@@ -56,7 +56,8 @@ import {
     GameNotFinalized,
     InvalidBondDistributionMode,
     GameNotResolved,
-    ReservedGameType
+    ReservedGameType,
+    GamePaused
 } from "src/dispute/lib/Errors.sol";
 
 // Interfaces
@@ -170,9 +171,9 @@ contract FaultDisputeGame is Clone, ISemver {
     uint256 internal constant HEADER_BLOCK_NUMBER_INDEX = 8;
 
     /// @notice Semantic version.
-    /// @custom:semver 1.4.0
+    /// @custom:semver 1.7.0
     function version() public pure virtual returns (string memory) {
-        return "1.4.0";
+        return "1.7.0";
     }
 
     /// @notice The starting timestamp of the game
@@ -213,7 +214,7 @@ contract FaultDisputeGame is Clone, ISemver {
     mapping(uint256 => ResolutionCheckpoint) public resolutionCheckpoints;
 
     /// @notice The latest finalized output root, serving as the anchor for output bisection.
-    OutputRoot public startingOutputRoot;
+    Proposal public startingOutputRoot;
 
     /// @notice A boolean for whether or not the game type was respected when the game was created.
     bool public wasRespectedGameTypeWhenCreated;
@@ -302,8 +303,8 @@ contract FaultDisputeGame is Clone, ISemver {
         // Should only happen if this is a new game type that hasn't been set up yet.
         if (root.raw() == bytes32(0)) revert AnchorRootNotFound();
 
-        // Set the starting output root.
-        startingOutputRoot = OutputRoot({ l2BlockNumber: rootBlockNumber, root: root });
+        // Set the starting proposal.
+        startingOutputRoot = Proposal({ l2SequenceNumber: rootBlockNumber, root: root });
 
         // Revert if the calldata size is not the expected length.
         //
@@ -616,7 +617,7 @@ contract FaultDisputeGame is Clone, ISemver {
 
             // We add the index at depth + 1 to the starting block number to get the disputed L2
             // block number.
-            uint256 l2Number = startingOutputRoot.l2BlockNumber + disputedPos.traceIndex(SPLIT_DEPTH) + 1;
+            uint256 l2Number = startingOutputRoot.l2SequenceNumber + disputedPos.traceIndex(SPLIT_DEPTH) + 1;
 
             // Choose the minimum between the `l2BlockNumber` claim and the bisected-to L2 block number.
             l2Number = l2Number < l2BlockNumber() ? l2Number : l2BlockNumber();
@@ -647,9 +648,14 @@ contract FaultDisputeGame is Clone, ISemver {
         l2BlockNumber_ = _getArgUint256(0x54);
     }
 
+    /// @notice The l2SequenceNumber of the disputed output root in the `L2OutputOracle` (in this case - block number).
+    function l2SequenceNumber() public pure returns (uint256 l2SequenceNumber_) {
+        l2SequenceNumber_ = l2BlockNumber();
+    }
+
     /// @notice Only the starting block number of the game.
     function startingBlockNumber() external view returns (uint256 startingBlockNumber_) {
-        startingBlockNumber_ = startingOutputRoot.l2BlockNumber;
+        startingBlockNumber_ = startingOutputRoot.l2SequenceNumber;
     }
 
     /// @notice Starting output root and block number of the game.
@@ -1001,6 +1007,16 @@ contract FaultDisputeGame is Clone, ISemver {
             revert InvalidBondDistributionMode();
         }
 
+        // We won't close the game if the system is currently paused. Paused games are temporarily
+        // invalid which would cause the game to go into refund mode and potentially cause some
+        // confusion for honest challengers. By blocking the game from being closed while the
+        // system is paused, the game will only go into refund mode if it ends up being explicitly
+        // invalidated in the AnchorStateRegistry. If the game has already been closed and a refund
+        // mode has been selected, we'll already have returned and we won't hit this revert.
+        if (ANCHOR_STATE_REGISTRY.paused()) {
+            revert GamePaused();
+        }
+
         // Make sure that the game is resolved.
         // AnchorStateRegistry should be checking this but we're being defensive here.
         if (resolvedAt.raw() == 0) {
@@ -1015,6 +1031,7 @@ contract FaultDisputeGame is Clone, ISemver {
 
         // Try to update the anchor game first. Won't always succeed because delays can lead
         // to situations in which this game might not be eligible to be a new anchor game.
+        // eip150-safe
         try ANCHOR_STATE_REGISTRY.setAnchorState(IDisputeGame(address(this))) { } catch { }
 
         // Check if the game is a proper game, which will determine the bond distribution mode.

@@ -52,6 +52,7 @@ library MIPS64Syscalls {
     uint64 internal constant PAGE_SIZE = 4096;
 
     uint32 internal constant SYS_MMAP = 5009;
+    uint32 internal constant SYS_MPROTECT = 5010;
     uint32 internal constant SYS_BRK = 5012;
     uint32 internal constant SYS_CLONE = 5055;
     uint32 internal constant SYS_EXIT_GROUP = 5205;
@@ -66,6 +67,7 @@ library MIPS64Syscalls {
     uint32 internal constant SYS_NANOSLEEP = 5034;
     uint32 internal constant SYS_CLOCKGETTIME = 5222;
     uint32 internal constant SYS_GETPID = 5038;
+    uint32 internal constant SYS_GETRANDOM = 5313;
     // no-op syscalls
     uint32 internal constant SYS_MUNMAP = 5011;
     uint32 internal constant SYS_GETAFFINITY = 5196;
@@ -87,7 +89,6 @@ library MIPS64Syscalls {
     uint32 internal constant SYS_PIPE2 = 5287;
     uint32 internal constant SYS_EPOLLCTL = 5208;
     uint32 internal constant SYS_EPOLLPWAIT = 5272;
-    uint32 internal constant SYS_GETRANDOM = 5313;
     uint32 internal constant SYS_UNAME = 5061;
     //uint32 internal constant SYS_STAT64 = 0xFFFFFFFF;  // UndefinedSysNr - not supported by MIPS64
     uint32 internal constant SYS_GETUID = 5100;
@@ -97,6 +98,7 @@ library MIPS64Syscalls {
     uint32 internal constant SYS_TGKILL = 5225;
     uint32 internal constant SYS_GETRLIMIT = 5095;
     uint32 internal constant SYS_LSEEK = 5008;
+    uint32 internal constant SYS_EVENTFD2 = 5284;
     // profiling-related syscalls - ignored
     uint32 internal constant SYS_SETITIMER = 5036;
     uint32 internal constant SYS_TIMERCREATE = 5216;

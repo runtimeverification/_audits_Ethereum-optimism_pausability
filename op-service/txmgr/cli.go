@@ -32,9 +32,13 @@ const (
 	FeeLimitMultiplierFlagName         = "fee-limit-multiplier"
 	FeeLimitThresholdFlagName          = "txmgr.fee-limit-threshold"
 	MinBaseFeeFlagName                 = "txmgr.min-basefee"
+	MaxBaseFeeFlagName                 = "txmgr.max-basefee"
 	MinTipCapFlagName                  = "txmgr.min-tip-cap"
+	MaxTipCapFlagName                  = "txmgr.max-tip-cap"
 	ResubmissionTimeoutFlagName        = "resubmission-timeout"
 	NetworkTimeoutFlagName             = "network-timeout"
+	RetryIntervalFlagName              = "txmgr.retry-interval"
+	MaxRetriesFlagName                 = "txmgr.max-retries"
 	TxSendTimeoutFlagName              = "txmgr.send-timeout"
 	TxNotInMempoolTimeoutFlagName      = "txmgr.not-in-mempool-timeout"
 	ReceiptQueryIntervalFlagName       = "txmgr.receipt-query-interval"
@@ -65,6 +69,8 @@ type DefaultFlagValues struct {
 	MinBaseFeeGwei            float64
 	ResubmissionTimeout       time.Duration
 	NetworkTimeout            time.Duration
+	RetryInterval             time.Duration
+	MaxRetries                uint64
 	TxSendTimeout             time.Duration
 	TxNotInMempoolTimeout     time.Duration
 	ReceiptQueryInterval      time.Duration
@@ -80,6 +86,8 @@ var (
 		MinBaseFeeGwei:            1.0,
 		ResubmissionTimeout:       48 * time.Second,
 		NetworkTimeout:            10 * time.Second,
+		RetryInterval:             1 * time.Second,
+		MaxRetries:                uint64(10),
 		TxSendTimeout:             0, // Try sending txs indefinitely, to preserve tx ordering for Holocene
 		TxNotInMempoolTimeout:     2 * time.Minute,
 		ReceiptQueryInterval:      12 * time.Second,
@@ -93,6 +101,8 @@ var (
 		MinBaseFeeGwei:            1.0,
 		ResubmissionTimeout:       24 * time.Second,
 		NetworkTimeout:            10 * time.Second,
+		RetryInterval:             1 * time.Second,
+		MaxRetries:                uint64(10),
 		TxSendTimeout:             2 * time.Minute,
 		TxNotInMempoolTimeout:     1 * time.Minute,
 		ReceiptQueryInterval:      12 * time.Second,
@@ -157,10 +167,20 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			EnvVars: prefixEnvVars("TXMGR_MIN_TIP_CAP"),
 		},
 		&cli.Float64Flag{
+			Name:    MaxTipCapFlagName,
+			Usage:   "Enforces a maximum tip cap (in GWei) to use when determining tx fees, `TxMgr` returns an error when exceeded. Disabled by default.",
+			EnvVars: prefixEnvVars("TXMGR_MAX_TIP_CAP"),
+		},
+		&cli.Float64Flag{
 			Name:    MinBaseFeeFlagName,
 			Usage:   "Enforces a minimum base fee (in GWei) to assume when determining tx fees. 1 GWei by default.",
 			Value:   defaults.MinBaseFeeGwei,
 			EnvVars: prefixEnvVars("TXMGR_MIN_BASEFEE"),
+		},
+		&cli.Float64Flag{
+			Name:    MaxBaseFeeFlagName,
+			Usage:   "Enforces a maximum base fee (in GWei) to assume when determining tx fees, `TxMgr` returns an error when exceeded. Disabled by default.",
+			EnvVars: prefixEnvVars("TXMGR_MAX_BASEFEE"),
 		},
 		&cli.DurationFlag{
 			Name:    ResubmissionTimeoutFlagName,
@@ -173,6 +193,18 @@ func CLIFlagsWithDefaults(envPrefix string, defaults DefaultFlagValues) []cli.Fl
 			Usage:   "Timeout for all network operations",
 			Value:   defaults.NetworkTimeout,
 			EnvVars: prefixEnvVars("NETWORK_TIMEOUT"),
+		},
+		&cli.DurationFlag{
+			Name:    RetryIntervalFlagName,
+			Usage:   "Duration we will wait before resubmitting a transaction to L1 on a transient error. Values <= 0 will result in retrying immediately. Should be less than ResubmissionTimeout to have an effect.",
+			Value:   defaults.RetryInterval,
+			EnvVars: prefixEnvVars("TXMGR_RETRY_INTERVAL"),
+		},
+		&cli.Uint64Flag{
+			Name:    MaxRetriesFlagName,
+			Usage:   "Maximum number of times to resubmit a transaction to L1 on a transient error. Set to 0 to disable retries.",
+			Value:   defaults.MaxRetries,
+			EnvVars: prefixEnvVars("TXMGR_MAX_RETRIES"),
 		},
 		&cli.DurationFlag{
 			Name:    TxSendTimeoutFlagName,
@@ -214,9 +246,13 @@ type CLIConfig struct {
 	FeeLimitThresholdGwei      float64
 	MinBaseFeeGwei             float64
 	MinTipCapGwei              float64
+	MaxBaseFeeGwei             float64
+	MaxTipCapGwei              float64
 	ResubmissionTimeout        time.Duration
 	ReceiptQueryInterval       time.Duration
 	NetworkTimeout             time.Duration
+	RetryInterval              time.Duration
+	MaxRetries                 uint64
 	TxSendTimeout              time.Duration
 	TxNotInMempoolTimeout      time.Duration
 	AlreadyPublishedCustomErrs []string
@@ -233,6 +269,8 @@ func NewCLIConfig(l1RPCURL string, defaults DefaultFlagValues) CLIConfig {
 		MinBaseFeeGwei:            defaults.MinBaseFeeGwei,
 		ResubmissionTimeout:       defaults.ResubmissionTimeout,
 		NetworkTimeout:            defaults.NetworkTimeout,
+		RetryInterval:             defaults.RetryInterval,
+		MaxRetries:                defaults.MaxRetries,
 		TxSendTimeout:             defaults.TxSendTimeout,
 		TxNotInMempoolTimeout:     defaults.TxNotInMempoolTimeout,
 		ReceiptQueryInterval:      defaults.ReceiptQueryInterval,
@@ -289,10 +327,14 @@ func ReadCLIConfig(ctx *cli.Context) CLIConfig {
 		FeeLimitMultiplier:         ctx.Uint64(FeeLimitMultiplierFlagName),
 		FeeLimitThresholdGwei:      ctx.Float64(FeeLimitThresholdFlagName),
 		MinBaseFeeGwei:             ctx.Float64(MinBaseFeeFlagName),
+		MaxBaseFeeGwei:             ctx.Float64(MaxBaseFeeFlagName),
 		MinTipCapGwei:              ctx.Float64(MinTipCapFlagName),
+		MaxTipCapGwei:              ctx.Float64(MaxTipCapFlagName),
 		ResubmissionTimeout:        ctx.Duration(ResubmissionTimeoutFlagName),
 		ReceiptQueryInterval:       ctx.Duration(ReceiptQueryIntervalFlagName),
 		NetworkTimeout:             ctx.Duration(NetworkTimeoutFlagName),
+		RetryInterval:              ctx.Duration(RetryIntervalFlagName),
+		MaxRetries:                 ctx.Uint64(MaxRetriesFlagName),
 		TxSendTimeout:              ctx.Duration(TxSendTimeoutFlagName),
 		TxNotInMempoolTimeout:      ctx.Duration(TxNotInMempoolTimeoutFlagName),
 		AlreadyPublishedCustomErrs: ctx.StringSlice(AlreadyPublishedCustomErrsFlagName),
@@ -346,6 +388,23 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		return nil, fmt.Errorf("invalid min tip cap: %w", err)
 	}
 
+	var (
+		maxBaseFee, maxTipCap *big.Int
+	)
+	if cfg.MaxBaseFeeGwei > 0 {
+		maxBaseFee, err = eth.GweiToWei(cfg.MaxBaseFeeGwei)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max base fee: %w", err)
+		}
+	}
+
+	if cfg.MaxTipCapGwei > 0 {
+		maxTipCap, err = eth.GweiToWei(cfg.MaxTipCapGwei)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max tip cap: %w", err)
+		}
+	}
+
 	res := Config{
 		Backend: l1,
 		ChainID: chainID,
@@ -355,6 +414,8 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 		TxSendTimeout:              cfg.TxSendTimeout,
 		TxNotInMempoolTimeout:      cfg.TxNotInMempoolTimeout,
 		NetworkTimeout:             cfg.NetworkTimeout,
+		RetryInterval:              cfg.RetryInterval,
+		MaxRetries:                 cfg.MaxRetries,
 		ReceiptQueryInterval:       cfg.ReceiptQueryInterval,
 		NumConfirmations:           cfg.NumConfirmations,
 		SafeAbortNonceTooLowCount:  cfg.SafeAbortNonceTooLowCount,
@@ -365,7 +426,9 @@ func NewConfig(cfg CLIConfig, l log.Logger) (*Config, error) {
 	res.FeeLimitThreshold.Store(feeLimitThreshold)
 	res.FeeLimitMultiplier.Store(cfg.FeeLimitMultiplier)
 	res.MinBaseFee.Store(minBaseFee)
+	res.MaxBaseFee.Store(maxBaseFee)
 	res.MinTipCap.Store(minTipCap)
+	res.MaxTipCap.Store(maxTipCap)
 	res.MinBlobTxFee.Store(defaultMinBlobTxFee)
 
 	return &res, nil
@@ -390,9 +453,13 @@ type Config struct {
 
 	// Minimum base fee (in Wei) to assume when determining tx fees.
 	MinBaseFee atomic.Pointer[big.Int]
+	// Maximum base fee (in Wei) to assume when determining tx fees.
+	MaxBaseFee atomic.Pointer[big.Int]
 
 	// Minimum tip cap (in Wei) to enforce when determining tx fees.
 	MinTipCap atomic.Pointer[big.Int]
+	// Maximum tip cap (in Wei) to enforce when determining tx fees.
+	MaxTipCap atomic.Pointer[big.Int]
 
 	MinBlobTxFee atomic.Pointer[big.Int]
 
@@ -410,6 +477,17 @@ type Config struct {
 	// NetworkTimeout is the allowed duration for a single network request.
 	// This is intended to be used for network requests that can be replayed.
 	NetworkTimeout time.Duration
+
+	// RetryInterval is the interval at which the tx manager will retry
+	// sending a transaction if it fails with a non-fatal error (e.g. the
+	// gapped nonce error in the blob pool).
+	RetryInterval time.Duration
+
+	// MaxRetries is the maximum number of times to retry sending a
+	// transaction. This is used to limit the number of times we retry
+	// sending a transaction if it fails with a non-fatal error (e.g. the
+	// gapped nonce error in the blob pool).
+	MaxRetries uint64
 
 	// ReceiptQueryInterval is the interval at which the tx manager will
 	// query the backend to check for confirmations after a tx at a
