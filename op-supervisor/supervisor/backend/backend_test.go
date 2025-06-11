@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -58,7 +59,7 @@ func TestWrongScopeBump(t *testing.T) {
 	dataDir := t.TempDir()
 	chainA := eth.ChainIDFromUInt64(testChainIDOffset)
 	chainB := eth.ChainIDFromUInt64(testChainIDOffset + 1)
-	fullCfgSet := fullConfigSet(t, 2)
+	fullCfgSet := fullConfigSet(t, 1)
 	rollupCfgSet := fullCfgSet.RollupConfigSet.(depset.StaticRollupConfigSet)
 
 	anchor := eth.BlockRef{
@@ -69,9 +70,6 @@ func TestWrongScopeBump(t *testing.T) {
 	}
 
 	rollupCfgSet[chainA].Genesis = depset.Genesis{
-		L2: types.BlockSealFromRef(anchor),
-	}
-	rollupCfgSet[chainB].Genesis = depset.Genesis{
 		L2: types.BlockSealFromRef(anchor),
 	}
 
@@ -95,11 +93,7 @@ func TestWrongScopeBump(t *testing.T) {
 
 	l1Src := &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
-	src := &MockProcessorSource{}
 
-	//
-	// Chain A
-	//
 	blockA1 := eth.BlockRef{
 		Hash:       common.Hash{0xaa},
 		Number:     anchor.Number + 1,
@@ -107,43 +101,50 @@ func TestWrongScopeBump(t *testing.T) {
 		Time:       anchor.Time + 2,
 	}
 
-	require.NoError(t, b.AttachProcessorSource(chainA, src))
-	require.NoError(t, ex.Drain())
-	_, err = b.CrossUnsafe(context.Background(), chainA)
-	require.NoError(t, err)
-	_, err = b.CrossSafe(context.Background(), chainA)
-	require.NoError(t, err)
-
-	src.ExpectBlockRefByNumber(1, blockA1, nil)
-	src.ExpectFetchReceipts(blockA1.Hash, nil, nil)
-	b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
-		ChainID:        chainA,
-		NewLocalUnsafe: blockA1,
+	// Create the receipt containing a logged message
+	msg := types.Message{
+		Identifier: types.Identifier{
+			Origin:      common.Address{0xaa},
+			BlockNumber: 1,
+			LogIndex:    0,
+			Timestamp:   1000,
+			ChainID:     chainB,
+		},
+		PayloadHash: common.Hash{0xaa},
+	}
+	topics, data := msg.EncodeEvent()
+	logs := make([]*types2.Log, 0)
+	logs = append(logs, &types2.Log{
+		Address: params.InteropCrossL2InboxAddress,
+		Data:    data,
+		Topics:  topics,
 	})
-	require.NoError(t, ex.Drain())
-
-	//
-	// Chain B
-	//
-	blockB1 := eth.BlockRef{
-		Hash:       common.Hash{0xaa},
-		Number:     anchor.Number + 1,
-		ParentHash: anchor.Hash,
-		Time:       anchor.Time + 2,
+	rcpt := types2.Receipt{
+		Logs: logs,
 	}
 
-	require.NoError(t, b.AttachProcessorSource(chainB, src))
-	src.ExpectBlockRefByNumber(1, blockB1, nil)
-	src.ExpectFetchReceipts(blockB1.Hash, nil, nil)
-	_, err = b.CrossUnsafe(context.Background(), chainB)
-	require.NoError(t, err)
-	_, err = b.CrossSafe(context.Background(), chainB)
-	require.NoError(t, err)
-	b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
-		ChainID:        chainB,
-		NewLocalUnsafe: blockB1,
+	src := &MockProcessorSource{}
+	require.NoError(t, b.AttachProcessorSource(chainA, src))
+	src.ExpectBlockRefByNumber(blockA1.Number, blockA1, nil)
+	src.ExpectFetchReceipts(blockA1.Hash, types2.Receipts{&rcpt}, nil)
+
+	L1Anchor := eth.BlockRef{
+		Hash:       common.Hash{0xcc},
+		Number:     0,
+		ParentHash: common.Hash{},
+		Time:       1000,
+	}
+
+	t.Log("Emitting LocalSafeUpdateEvent")
+	b.emitter.Emit(superevents.LocalSafeUpdateEvent{
+		ChainID: chainA,
+		NewLocalSafe: types.DerivedBlockSealPair{
+			Source:  types.BlockSealFromRef(L1Anchor),
+			Derived: types.BlockSealFromRef(blockA1),
+		},
 	})
 	require.NoError(t, ex.Drain())
+	t.Log("Done Emitting LocalSafeUpdateEvent!")
 
 	err = b.Stop(context.Background())
 	require.NoError(t, err)
