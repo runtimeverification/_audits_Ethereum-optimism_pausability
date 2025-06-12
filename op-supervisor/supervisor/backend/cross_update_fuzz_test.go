@@ -33,10 +33,11 @@ func FuzzCrossUpdate(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, chainALength uint, chainBLength uint, crossUnsafeHeadIndex uint) {
 		logger := testlog.Logger(t, log.LvlInfo)
-		m := metrics.NoopMetrics
 		dataDir := t.TempDir()
+
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
+
 		depSet, err := depset.NewStaticConfigDependencySet(
 			map[eth.ChainID]*depset.StaticConfigDependency{
 				chainA: {
@@ -65,7 +66,7 @@ func FuzzCrossUpdate(f *testing.F) {
 		}
 
 		ex := event.NewGlobalSynchronous(context.Background())
-		b, err := NewSupervisorBackend(context.Background(), logger, m, cfg, ex)
+		b, err := NewSupervisorBackend(context.Background(), logger, metrics.NoopMetrics, cfg, ex)
 		require.NoError(t, err)
 		t.Log("initialized!")
 
@@ -91,16 +92,14 @@ func FuzzCrossUpdate(f *testing.F) {
 		ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		require.NoError(t, ex.Drain())
-		err = b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
-		require.NoError(t, err)
 
-		localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
-		require.NoError(t, err)
-		t.Logf("Local Unsafe head for Chain A: %d", localUnsafe.Number)
+		t.Run("Cross-unsafe Update invariants", func(t *testing.T) {
+			InitialState(t, b, chainA, crossUnsafeHead)
+			b.emitter.Emit(superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA})
+			require.NoError(t, ex.Drain())
 
-		crossUnsafe, err := b.CrossUnsafe(context.Background(), chainA)
-		require.NoError(t, err)
-		t.Logf("Cross Unsafe head for Chain A: %d", crossUnsafe.Number)
+			Invariant1(t, b, chainA)
+		})
 
 		err = b.Stop(context.Background())
 		require.NoError(t, err)
@@ -207,4 +206,29 @@ func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChain
 	} else {
 		t.Log("Chain B has no blocks to initialize")
 	}
+}
+
+func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossUnsafeHead types.BlockSeal) {
+	err := b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
+	require.NoError(t, err)
+
+	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
+	require.NoError(t, err)
+	t.Logf("Local Unsafe head for Chain A: %d", localUnsafe.Number)
+
+	crossUnsafe, err := b.CrossUnsafe(context.Background(), chainA)
+	require.NoError(t, err)
+	t.Logf("Cross Unsafe head for Chain A: %d", crossUnsafe.Number)
+}
+
+func Invariant1(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
+
+	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
+	require.NoError(t, err)
+	crossUnsafe, err := b.CrossUnsafe(context.Background(), chainA)
+	require.NoError(t, err)
+
+	t.Logf("Cross Unsafe head for Chain A: %d <= Local Unsafe head for Chain A: %d", crossUnsafe.Number, localUnsafe.Number)
+
+	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number)
 }
