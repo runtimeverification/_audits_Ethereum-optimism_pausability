@@ -32,60 +32,14 @@ func FuzzCrossUpdate(f *testing.F) {
 	f.Add(uint(4), uint(2), uint(2)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, chainALength uint, chainBLength uint, crossUnsafeHeadIndex uint) {
-		logger := testlog.Logger(t, log.LvlInfo)
-		dataDir := t.TempDir()
-
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
-		depSet, err := depset.NewStaticConfigDependencySet(
-			map[eth.ChainID]*depset.StaticConfigDependency{
-				chainA: {
-					ChainIndex:     900,
-					ActivationTime: 42,
-					HistoryMinTime: 100,
-				},
-				chainB: {
-					ChainIndex:     901,
-					ActivationTime: 30,
-					HistoryMinTime: 20,
-				},
-			})
-		require.NoError(t, err)
-		cfg := &config.Config{
-			Version:               "test",
-			LogConfig:             oplog.CLIConfig{},
-			MetricsConfig:         opmetrics.CLIConfig{},
-			PprofConfig:           oppprof.CLIConfig{},
-			RPC:                   oprpc.CLIConfig{},
-			DependencySetSource:   depSet,
-			SynchronousProcessors: true,
-			MockRun:               false,
-			SyncSources:           &syncnode.CLISyncNodes{},
-			Datadir:               dataDir,
-		}
+		ex, b, _, srcChainA, srcChainB := ExecutorBackendInit(t, chainA, chainB)
 
-		ex := event.NewGlobalSynchronous(context.Background())
-		b, err := NewSupervisorBackend(context.Background(), logger, metrics.NoopMetrics, cfg, ex)
-		require.NoError(t, err)
-		t.Log("initialized!")
-
-		l1Src := &testutils.MockL1Source{}
-		b.AttachL1Source(l1Src)
-
-		srcChainA := &MockProcessorSource{}
-		require.NoError(t, b.AttachProcessorSource(chainA, srcChainA))
-
-		srcChainB := &MockProcessorSource{}
-		require.NoError(t, b.AttachProcessorSource(chainB, srcChainB))
-
-		err = b.Start(context.Background())
-		require.NoError(t, err)
-		t.Log("started!")
-
-		chainALength = chainALength%10 + 1
+		chainALength = chainALength%10 + 1 // ChainA can't be empty
 		chainBLength = chainBLength % 10
-		crossUnsafeHeadIndex = crossUnsafeHeadIndex % (chainALength + 1)
+		crossUnsafeHeadIndex = crossUnsafeHeadIndex % chainALength
 		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
 
 		crossUnsafeHead := ChainAInit(t, b, chainA, srcChainA, chainALength, crossUnsafeHeadIndex)
@@ -93,7 +47,7 @@ func FuzzCrossUpdate(f *testing.F) {
 
 		require.NoError(t, ex.Drain())
 
-		t.Run("Cross-unsafe Update invariants", func(t *testing.T) {
+		t.Run("Cross Unsafe Update", func(t *testing.T) {
 			InitialState(t, b, chainA, crossUnsafeHead)
 			b.emitter.Emit(superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA})
 			require.NoError(t, ex.Drain())
@@ -101,11 +55,71 @@ func FuzzCrossUpdate(f *testing.F) {
 			Invariant1(t, b, chainA)
 		})
 
-		err = b.Stop(context.Background())
+		t.Run("Cross Safe Update", func(t *testing.T) {
+			InitialState(t, b, chainA, crossUnsafeHead)
+			b.emitter.Emit(superevents.UpdateCrossSafeRequestEvent{ChainID: chainA})
+			require.NoError(t, ex.Drain())
+
+			Invariant1(t, b, chainA)
+		})
+
+		err := b.Stop(context.Background())
 		require.NoError(t, err)
 		t.Log("stopped!")
 	})
 
+}
+
+func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (ex *event.GlobalSyncExec, b *SupervisorBackend, l1Src *testutils.MockL1Source, srcChainA *MockProcessorSource, srcChainB *MockProcessorSource) {
+	logger := testlog.Logger(t, log.LvlInfo)
+	dataDir := t.TempDir()
+
+	depSet, err := depset.NewStaticConfigDependencySet(
+		map[eth.ChainID]*depset.StaticConfigDependency{
+			chainA: {
+				ChainIndex:     900,
+				ActivationTime: 42,
+				HistoryMinTime: 100,
+			},
+			chainB: {
+				ChainIndex:     901,
+				ActivationTime: 30,
+				HistoryMinTime: 20,
+			},
+		})
+	require.NoError(t, err)
+	cfg := &config.Config{
+		Version:               "test",
+		LogConfig:             oplog.CLIConfig{},
+		MetricsConfig:         opmetrics.CLIConfig{},
+		PprofConfig:           oppprof.CLIConfig{},
+		RPC:                   oprpc.CLIConfig{},
+		DependencySetSource:   depSet,
+		SynchronousProcessors: true,
+		MockRun:               false,
+		SyncSources:           &syncnode.CLISyncNodes{},
+		Datadir:               dataDir,
+	}
+
+	ex = event.NewGlobalSynchronous(context.Background())
+	b, err = NewSupervisorBackend(context.Background(), logger, metrics.NoopMetrics, cfg, ex)
+	require.NoError(t, err)
+	t.Log("initialized!")
+
+	l1Src = &testutils.MockL1Source{}
+	b.AttachL1Source(l1Src)
+
+	srcChainA = &MockProcessorSource{}
+	require.NoError(t, b.AttachProcessorSource(chainA, srcChainA))
+
+	srcChainB = &MockProcessorSource{}
+	require.NoError(t, b.AttachProcessorSource(chainB, srcChainB))
+
+	err = b.Start(context.Background())
+	require.NoError(t, err)
+	t.Log("started!")
+
+	return ex, b, l1Src, srcChainA, srcChainB
 }
 
 func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChainA *MockProcessorSource, chainALength uint, crossUnsafeHeadIndex uint) types.BlockSeal {
