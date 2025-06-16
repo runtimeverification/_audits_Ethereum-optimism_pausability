@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
@@ -50,6 +51,25 @@ func fullConfigSet(t *testing.T, size int) depset.FullConfigSetMerged {
 	fullCfgSet, err := depset.NewFullConfigSetMerged(rollupCfgSet, depSet)
 	require.NoError(t, err)
 	return fullCfgSet
+}
+
+func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log *types2.Log) *types2.Log {
+	msg := types.Message{
+		Identifier: types.Identifier{
+			Origin:      log.Address,
+			BlockNumber: block.Number,
+			LogIndex:    log_index,
+			Timestamp:   block.Time,
+			ChainID:     chain,
+		},
+		PayloadHash: processors.LogToPayloadHash(log),
+	}
+	topics, data := msg.EncodeEvent()
+	return &types2.Log{
+		Address: params.InteropCrossL2InboxAddress,
+		Data:    data,
+		Topics:  topics,
+	}
 }
 
 func TestBackendLifetime_InteropAtGenesis(t *testing.T) {
