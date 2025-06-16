@@ -29,9 +29,9 @@ import (
 
 func FuzzCrossUpdate(f *testing.F) {
 
-	f.Add(uint(4), uint(2), uint(2)) // Add initial values for fuzzing
+	f.Add(uint(5), uint(2), uint(3), uint(3), uint(1)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T, chainALength uint, chainBLength uint, crossUnsafeHeadIndex uint) {
+	f.Fuzz(func(t *testing.T, chainALength uint, chainBLength uint, crossUnsafeHeadIndex uint, localSafeHeadIndex uint, crossSafeHeadIndex uint) {
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
@@ -40,9 +40,15 @@ func FuzzCrossUpdate(f *testing.F) {
 		chainALength = chainALength%10 + 1 // ChainA can't be empty
 		chainBLength = chainBLength % 10
 		crossUnsafeHeadIndex = crossUnsafeHeadIndex % chainALength
+		localSafeHeadIndex = localSafeHeadIndex % chainALength
+		if localSafeHeadIndex > 0 {
+			crossSafeHeadIndex = crossSafeHeadIndex % localSafeHeadIndex
+		} else {
+			crossSafeHeadIndex = 0
+		}
 		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
 
-		crossUnsafeHead := ChainAInit(t, b, chainA, srcChainA, chainALength, crossUnsafeHeadIndex)
+		crossUnsafeHead := ChainAInit(t, b, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
 		ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		require.NoError(t, ex.Drain())
@@ -122,62 +128,57 @@ func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (
 	return ex, b, l1Src, srcChainA, srcChainB
 }
 
-func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChainA *MockProcessorSource, chainALength uint, crossUnsafeHeadIndex uint) types.BlockSeal {
+func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChainA *MockProcessorSource, chainALength uint, crossUnsafeHeadIndex uint, localSafeHeadIndex uint, crossSafeHeadIndex uint) types.BlockSeal {
 	t.Log("Initializing Chain A")
 	t.Logf("Chain A length: %d", chainALength)
 
 	var block, crossUnsafeHead eth.BlockRef
 
-	if chainALength > 0 {
-		// Initialize the chainA source with a genesis block
-		block = eth.BlockRef{
-			Hash:       common.BytesToHash([]byte{0xaa, 0x00}),
-			Number:     0,
-			ParentHash: common.Hash{}, // genesis has no parent hash
-			Time:       uint64(time.Now().Unix()),
-		}
-		crossUnsafeHead = block
-		t.Logf("Chain A genesis block:%s", block.Hash.Hex())
-		srcChainA.ExpectBlockRefByNumber(0, block, nil)
-		srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)
-		// Emit the anchor event for chain A with the genesis block
-		// This is necessary to initialize the database with the genesis block
-		b.emitter.Emit(superevents.AnchorEvent{
-			ChainID: chainA,
-			Anchor: types.DerivedBlockRefPair{
-				Derived: block,
-				Source:  eth.L1BlockRef{},
-			}})
-		i := 1
-		for ; i < int(chainALength); i++ {
-			block = eth.BlockRef{
-				Hash:       common.BytesToHash([]byte{0xaa, byte(i)}),
-				Number:     uint64(i),
-				ParentHash: common.BytesToHash([]byte{0xaa, byte(i - 1)}),
-				Time:       uint64(time.Now().Add(time.Duration(i*5) * time.Minute).Unix()),
-			}
-			if i == int(crossUnsafeHeadIndex) {
-				// Set the cross unsafe head to a specific block
-				crossUnsafeHead = block
-			}
-			t.Logf("Chain A block %d: %s\t Timestamp:%d", i, block.Hash.Hex(), block.Time)
-			// Expect the source to return the block by number
-			srcChainA.ExpectBlockRefByNumber(uint64(i), block, nil)
-			srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)
-		}
-		srcChainA.ExpectBlockRefByNumber(uint64(i), eth.L1BlockRef{}, ethereum.NotFound)
-		// After the anchor event, the database is initialized, and the call to update
-		// from the LocalUnsafe event will succeed.
-		b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
-			ChainID:        chainA,
-			NewLocalUnsafe: block,
-		})
-		t.Log("Emitted LocalUnsafeReceivedEvent for Chain A")
-		return types.BlockSealFromRef(crossUnsafeHead)
-	} else {
-		t.Log("Chain A has no blocks to initialize")
-		return types.BlockSeal{}
+	// Initialize the chainA source with a genesis block
+	block = eth.BlockRef{
+		Hash:       common.BytesToHash([]byte{0xaa, 0x00}),
+		Number:     0,
+		ParentHash: common.Hash{}, // genesis has no parent hash
+		Time:       uint64(time.Now().Unix()),
 	}
+	crossUnsafeHead = block
+	t.Logf("Chain A genesis block:%s", block.Hash.Hex())
+	srcChainA.ExpectBlockRefByNumber(0, block, nil)
+	srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)
+	// Emit the anchor event for chain A with the genesis block
+	// This is necessary to initialize the database with the genesis block
+	b.emitter.Emit(superevents.AnchorEvent{
+		ChainID: chainA,
+		Anchor: types.DerivedBlockRefPair{
+			Derived: block,
+			Source:  eth.L1BlockRef{},
+		}})
+	i := 1
+	for ; i < int(chainALength); i++ {
+		block = eth.BlockRef{
+			Hash:       common.BytesToHash([]byte{0xaa, byte(i)}),
+			Number:     uint64(i),
+			ParentHash: common.BytesToHash([]byte{0xaa, byte(i - 1)}),
+			Time:       uint64(time.Now().Add(time.Duration(i*5) * time.Minute).Unix()),
+		}
+		if i == int(crossUnsafeHeadIndex) {
+			// Set the cross unsafe head to a specific block
+			crossUnsafeHead = block
+		}
+		t.Logf("Chain A block %d: %s\t Timestamp:%d", i, block.Hash.Hex(), block.Time)
+		// Expect the source to return the block by number
+		srcChainA.ExpectBlockRefByNumber(uint64(i), block, nil)
+		srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)
+	}
+	srcChainA.ExpectBlockRefByNumber(uint64(i), eth.L1BlockRef{}, ethereum.NotFound)
+	// After the anchor event, the database is initialized, and the call to update
+	// from the LocalUnsafe event will succeed.
+	b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
+		ChainID:        chainA,
+		NewLocalUnsafe: block,
+	})
+	t.Log("Emitted LocalUnsafeReceivedEvent for Chain A")
+	return types.BlockSealFromRef(crossUnsafeHead)
 }
 
 func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChainB *MockProcessorSource, chainBLength uint) {
