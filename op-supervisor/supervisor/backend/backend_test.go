@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"path/filepath"
 	"testing"
 
@@ -53,13 +54,46 @@ func fullConfigSet(t *testing.T, size int) depset.FullConfigSetMerged {
 	return fullCfgSet
 }
 
+func rcpt_w_log(log *types2.Log) types2.Receipt {
+	logs := make([]*types2.Log, 0)
+	logs = append(logs, log)
+	rcpt := types2.Receipt{
+		Logs: logs,
+	}
+	return rcpt
+}
+
+func rcpt_w_exec(chain eth.ChainID, block eth.BlockRef, log_index uint32, log *types2.Log) types2.Receipt {
+	msg := types.Message{
+		Identifier: types.Identifier{
+			Origin:      log.Address,
+			BlockNumber: block.Number,
+			LogIndex:    log_index,
+			Timestamp:   block.Time,
+			ChainID:     chain,
+		},
+		PayloadHash: processors.LogToPayloadHash(log),
+	}
+	topics, data := msg.EncodeEvent()
+	logs := make([]*types2.Log, 0)
+	logs = append(logs, &types2.Log{
+		Address: params.InteropCrossL2InboxAddress,
+		Data:    data,
+		Topics:  topics,
+	})
+	rcpt := types2.Receipt{
+		Logs: logs,
+	}
+	return rcpt
+}
+
 func TestWrongScopeBump(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	m := metrics.NoopMetrics
 	dataDir := t.TempDir()
 	chainA := eth.ChainIDFromUInt64(testChainIDOffset)
 	chainB := eth.ChainIDFromUInt64(testChainIDOffset + 1)
-	fullCfgSet := fullConfigSet(t, 1)
+	fullCfgSet := fullConfigSet(t, 2)
 	rollupCfgSet := fullCfgSet.RollupConfigSet.(depset.StaticRollupConfigSet)
 
 	anchor := eth.BlockRef{
@@ -69,8 +103,18 @@ func TestWrongScopeBump(t *testing.T) {
 		Time:       10000,
 	}
 
+	anchorB := eth.BlockRef{
+		Hash:       common.Hash{0xee},
+		Number:     0,
+		ParentHash: common.Hash{}, // genesis has no parent hash
+		Time:       10000,
+	}
+
 	rollupCfgSet[chainA].Genesis = depset.Genesis{
 		L2: types.BlockSealFromRef(anchor),
+	}
+	rollupCfgSet[chainB].Genesis = depset.Genesis{
+		L2: types.BlockSealFromRef(anchorB),
 	}
 
 	cfg := &config.Config{
@@ -102,31 +146,13 @@ func TestWrongScopeBump(t *testing.T) {
 	}
 
 	// Create the receipt containing a logged message
-	msg := types.Message{
-		Identifier: types.Identifier{
-			Origin:      common.Address{0xaa},
-			BlockNumber: 1,
-			LogIndex:    0,
-			Timestamp:   1000,
-			ChainID:     chainB,
-		},
-		PayloadHash: common.Hash{0xaa},
-	}
-	topics, data := msg.EncodeEvent()
-	logs := make([]*types2.Log, 0)
-	logs = append(logs, &types2.Log{
-		Address: params.InteropCrossL2InboxAddress,
-		Data:    data,
-		Topics:  topics,
-	})
-	rcpt := types2.Receipt{
-		Logs: logs,
-	}
+	log1 := testutils.RandomLog(rand.New(rand.NewSource(1)))
+	rcpt := rcpt_w_log(log1)
 
-	src := &MockProcessorSource{}
-	require.NoError(t, b.AttachProcessorSource(chainA, src))
-	src.ExpectBlockRefByNumber(blockA1.Number, blockA1, nil)
-	src.ExpectFetchReceipts(blockA1.Hash, types2.Receipts{&rcpt}, nil)
+	srcA := &MockProcessorSource{}
+	require.NoError(t, b.AttachProcessorSource(chainA, srcA))
+	srcA.ExpectBlockRefByNumber(blockA1.Number, blockA1, nil)
+	srcA.ExpectFetchReceipts(blockA1.Hash, types2.Receipts{&rcpt}, nil)
 
 	L1Anchor := eth.BlockRef{
 		Hash:       common.Hash{0xcc},
@@ -141,6 +167,31 @@ func TestWrongScopeBump(t *testing.T) {
 		NewLocalSafe: types.DerivedBlockSealPair{
 			Source:  types.BlockSealFromRef(L1Anchor),
 			Derived: types.BlockSealFromRef(blockA1),
+		},
+	})
+	require.NoError(t, ex.Drain())
+	t.Log("Done Emitting LocalSafeUpdateEvent!")
+
+	rcpt = rcpt_w_exec(chainA, blockA1, common.Address{0xaa}, 0, log1)
+
+	blockB1 := eth.BlockRef{
+		Hash:       common.Hash{0xbb},
+		Number:     anchorB.Number + 1,
+		ParentHash: anchorB.Hash,
+		Time:       anchorB.Time + 2,
+	}
+
+	srcB := &MockProcessorSource{}
+	require.NoError(t, b.AttachProcessorSource(chainB, srcB))
+	srcB.ExpectBlockRefByNumber(blockB1.Number, blockB1, nil)
+	srcB.ExpectFetchReceipts(blockB1.Hash, types2.Receipts{&rcpt}, nil)
+
+	t.Log("Emitting LocalSafeUpdateEvent")
+	b.emitter.Emit(superevents.LocalSafeUpdateEvent{
+		ChainID: chainB,
+		NewLocalSafe: types.DerivedBlockSealPair{
+			Source:  types.BlockSealFromRef(L1Anchor),
+			Derived: types.BlockSealFromRef(blockB1),
 		},
 	})
 	require.NoError(t, ex.Drain())
