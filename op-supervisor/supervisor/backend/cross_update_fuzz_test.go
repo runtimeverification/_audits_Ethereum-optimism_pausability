@@ -29,9 +29,9 @@ import (
 
 func FuzzCrossUpdate(f *testing.F) {
 
-	f.Add(uint(5), uint(2), uint(3), uint(3), uint(1)) // Add initial values for fuzzing
+	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T, chainALength uint, chainBLength uint, crossUnsafeHeadIndex uint, localSafeHeadIndex uint, crossSafeHeadIndex uint) {
+	f.Fuzz(func(t *testing.T, chainALength uint64, chainBLength uint64, crossUnsafeHeadIndex uint64, localSafeHeadIndex uint64, crossSafeHeadIndex uint64) {
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
@@ -48,13 +48,13 @@ func FuzzCrossUpdate(f *testing.F) {
 		}
 		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
 
-		crossUnsafeHead := ChainAInit(t, b, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		crossUnsafeHead, localSafeHead, crossSafeHead := ChainAInit(t, b, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
 		ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		require.NoError(t, ex.Drain())
 
 		t.Run("Cross Unsafe Update", func(t *testing.T) {
-			InitialState(t, b, chainA, crossUnsafeHead)
+			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
 			b.emitter.Emit(superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA})
 			require.NoError(t, ex.Drain())
 
@@ -62,7 +62,7 @@ func FuzzCrossUpdate(f *testing.F) {
 		})
 
 		t.Run("Cross Safe Update", func(t *testing.T) {
-			InitialState(t, b, chainA, crossUnsafeHead)
+			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
 			b.emitter.Emit(superevents.UpdateCrossSafeRequestEvent{ChainID: chainA})
 			require.NoError(t, ex.Drain())
 
@@ -128,20 +128,25 @@ func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (
 	return ex, b, l1Src, srcChainA, srcChainB
 }
 
-func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChainA *MockProcessorSource, chainALength uint, crossUnsafeHeadIndex uint, localSafeHeadIndex uint, crossSafeHeadIndex uint) types.BlockSeal {
+func ChainAInit(t *testing.T,
+	b *SupervisorBackend,
+	chainA eth.ChainID,
+	srcChainA *MockProcessorSource,
+	chainALength uint64,
+	crossUnsafeHeadIndex uint64,
+	localSafeHeadIndex uint64,
+	crossSafeHeadIndex uint64) (types.BlockSeal, eth.BlockRef, eth.BlockRef) {
 	t.Log("Initializing Chain A")
 	t.Logf("Chain A length: %d", chainALength)
 
-	var block, crossUnsafeHead eth.BlockRef
-
 	// Initialize the chainA source with a genesis block
-	block = eth.BlockRef{
+	block := eth.BlockRef{
 		Hash:       common.BytesToHash([]byte{0xaa, 0x00}),
 		Number:     0,
 		ParentHash: common.Hash{}, // genesis has no parent hash
 		Time:       uint64(time.Now().Unix()),
 	}
-	crossUnsafeHead = block
+	crossUnsafeHead, localSafeHead, crossSafeHead := block, block, block
 	t.Logf("Chain A genesis block:%s", block.Hash.Hex())
 	srcChainA.ExpectBlockRefByNumber(0, block, nil)
 	srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)
@@ -165,6 +170,14 @@ func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChain
 			// Set the cross unsafe head to a specific block
 			crossUnsafeHead = block
 		}
+		if i == int(localSafeHeadIndex) {
+			// Set the cross unsafe head to a specific block
+			localSafeHead = block
+		}
+		if i == int(crossSafeHeadIndex) {
+			// Set the cross unsafe head to a specific block
+			crossSafeHead = block
+		}
 		t.Logf("Chain A block %d: %s\t Timestamp:%d", i, block.Hash.Hex(), block.Time)
 		// Expect the source to return the block by number
 		srcChainA.ExpectBlockRefByNumber(uint64(i), block, nil)
@@ -178,10 +191,10 @@ func ChainAInit(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, srcChain
 		NewLocalUnsafe: block,
 	})
 	t.Log("Emitted LocalUnsafeReceivedEvent for Chain A")
-	return types.BlockSealFromRef(crossUnsafeHead)
+	return types.BlockSealFromRef(crossUnsafeHead), localSafeHead, crossSafeHead
 }
 
-func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChainB *MockProcessorSource, chainBLength uint) {
+func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChainB *MockProcessorSource, chainBLength uint64) {
 	t.Log("Initializing Chain B")
 	t.Logf("Chain B length: %d", chainBLength)
 
@@ -223,8 +236,13 @@ func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChain
 	}
 }
 
-func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossUnsafeHead types.BlockSeal) {
+func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossUnsafeHead types.BlockSeal, localSafeHead eth.BlockRef, crossSafeHead eth.BlockRef) {
 	err := b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
+	require.NoError(t, err)
+
+	// TODO: Create L1 blocks
+	// Update LocalSafe
+	b.chainDBs.UpdateLocalSafe(chainA, eth.L1BlockRef{}, localSafeHead, "test")
 	require.NoError(t, err)
 
 	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
@@ -234,6 +252,10 @@ func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossU
 	crossUnsafe, err := b.CrossUnsafe(context.Background(), chainA)
 	require.NoError(t, err)
 	t.Logf("Cross Unsafe head for Chain A: %d", crossUnsafe.Number)
+
+	localSafe, err := b.LocalSafe(context.Background(), chainA)
+	require.NoError(t, err)
+	t.Logf("Local Safe head for Chain A: %d", localSafe.Derived.Number)
 }
 
 func Invariant1(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
