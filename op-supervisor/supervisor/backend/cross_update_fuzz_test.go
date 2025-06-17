@@ -29,7 +29,7 @@ import (
 
 func FuzzCrossUpdate(f *testing.F) {
 
-	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
+	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, chainALength uint64, chainBLength uint64, crossUnsafeHeadIndex uint64, localSafeHeadIndex uint64, crossSafeHeadIndex uint64) {
 		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
@@ -51,23 +51,44 @@ func FuzzCrossUpdate(f *testing.F) {
 		crossUnsafeHead, localSafeHead, crossSafeHead := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
-		require.NoError(t, ex.Drain())
-
 		t.Run("Cross Unsafe Update", func(t *testing.T) {
 			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
-			b.emitter.Emit(superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA})
-			require.NoError(t, ex.Drain())
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.UpdateCrossUnsafeRequestEvent{
+					ChainID: chainA,
+				},
+				EmitPriority: event.High,
+			})
 
-			Invariant1(t, b, chainA)
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					// We expect the UpdateCrossUnsafeRequestEvent to be emitted
+					return ev == superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA}
+				}, false))
+			t.Log("Cross Unsafe Update processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+
 		})
 
 		t.Run("Cross Safe Update", func(t *testing.T) {
-			t.Skip()
 			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
-			b.emitter.Emit(superevents.UpdateCrossSafeRequestEvent{ChainID: chainA})
-			require.NoError(t, ex.Drain())
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.UpdateCrossSafeRequestEvent{
+					ChainID: chainA,
+				},
+				EmitPriority: event.High,
+			})
 
-			Invariant1(t, b, chainA)
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					// We expect the UpdateCrossUnsafeRequestEvent to be emitted
+					return ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chainA}
+				}, false))
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
 		})
 
 		err := b.Stop(context.Background())
@@ -179,7 +200,7 @@ func ChainAInit(t *testing.T,
 			ChainID:        chainA,
 			NewLocalUnsafe: block,
 		})
-		require.NoError(t, ex.Drain())
+
 		if i <= int(crossUnsafeHeadIndex) {
 			// Set the cross unsafe head to a specific block
 			crossUnsafeHead = block
@@ -187,16 +208,22 @@ func ChainAInit(t *testing.T,
 		}
 		if i <= int(localSafeHeadIndex) {
 			// TODO create L1 source blocks
-			b.chainDBs.UpdateLocalSafe(chainA, eth.L1BlockRef{}, block, "test")
-		}
-		if i == int(crossSafeHeadIndex) {
-			// Set the cross unsafe head to a specific block
-			crossSafeHead = block
+			b.emitter.Emit(superevents.LocalDerivedEvent{
+				ChainID: chainA,
+				Derived: types.DerivedBlockRefPair{
+					Derived: block,
+					Source:  eth.L1BlockRef{},
+				},
+				NodeID: "test-node",
+			})
 		}
 	}
 	srcChainA.ExpectBlockRefByNumber(uint64(i), eth.L1BlockRef{}, ethereum.NotFound)
-	// After the anchor event, the database is initialized, and the call to update
-	// from the LocalUnsafe event will succeed.
+
+	require.NoError(t, ex.DrainUntil(
+		func(ev event.Event) bool {
+			return ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chainA}
+		}, true))
 
 	return types.BlockSealFromRef(crossUnsafeHead), localSafeHead, crossSafeHead
 }
@@ -247,6 +274,9 @@ func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossU
 	err := b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
 	require.NoError(t, err)
 
+	//err = b.chainDBs.UpdateCrossSafe(chainA, crossSafeHead, crossSafeHead)
+	//require.NoError(t, err)
+
 	t.Log("Initial state for Chain A")
 
 	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
@@ -260,9 +290,13 @@ func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossU
 	localSafe, err := b.LocalSafe(context.Background(), chainA)
 	require.NoError(t, err)
 	t.Logf("Local Safe head: %d", localSafe.Derived.Number)
+
+	crossSafe, err := b.CrossSafe(context.Background(), chainA)
+	require.NoError(t, err)
+	t.Logf("Cross Safe head: %d", crossSafe.Derived.Number)
 }
 
-func Invariant1(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
+func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
 
 	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
 	require.NoError(t, err)
@@ -272,4 +306,16 @@ func Invariant1(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
 	t.Logf("Cross Unsafe head for Chain A: %d <= Local Unsafe head for Chain A: %d", crossUnsafe.Number, localUnsafe.Number)
 
 	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number)
+}
+
+func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
+
+	localSafe, err := b.LocalSafe(context.Background(), chainA)
+	require.NoError(t, err)
+	crossSafe, err := b.CrossSafe(context.Background(), chainA)
+	require.NoError(t, err)
+
+	t.Logf("Cross Safe head for Chain A: %d <= Local Safe head for Chain A: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
+
+	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number)
 }
