@@ -87,6 +87,161 @@ func rcpt_w_exec(chain eth.ChainID, block eth.BlockRef, log_index uint32, log *t
 	return rcpt
 }
 
+type ChainRandomizerParams struct {
+	chainCount int
+
+	minLength int
+	maxLength int
+
+	sameTimestampFrequency int // Percentage [0-100]
+
+	chainIDs     []eth.ChainID
+	chainSources map[eth.ChainID]*MockProcessorSource
+	chainBlocks  map[eth.ChainID][]*eth.BlockRef
+
+	r *rand.Rand
+}
+
+func NewChainRandomizer(chainCount int, minLen int, maxLen int, timeStampFreq int, seed int64) ChainRandomizerParams {
+	chainSources := make(map[eth.ChainID]*MockProcessorSource, chainCount)
+	chainBlocks := make(map[eth.ChainID][]*eth.BlockRef, chainCount)
+	chainIDs := make([]eth.ChainID, 0, chainCount)
+	for i := range chainCount {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+		chainBlocks[chain] = make([]*eth.BlockRef, 0)
+		chainSources[chain] = &MockProcessorSource{}
+		chainIDs = append(chainIDs, chain)
+	}
+	r := rand.New(rand.NewSource(seed))
+	return ChainRandomizerParams{
+		chainCount:             chainCount,
+		minLength:              minLen,
+		maxLength:              maxLen,
+		sameTimestampFrequency: timeStampFreq,
+		chainIDs:               chainIDs,
+		chainSources:           chainSources,
+		chainBlocks:            chainBlocks,
+		r:                      r,
+	}
+}
+
+func (p *ChainRandomizerParams) makeChainArray() []*eth.BlockRef {
+	r := *p.r
+	length := r.Intn(p.maxLength-p.minLength) + p.minLength
+	blocks := make([]*eth.BlockRef, 0, length)
+	timeStampCount := 1 // Can't be greater than p.chainCount
+	for i := range length {
+		if i == 0 {
+			newblock := testutils.RandomBlockRef(&r)
+			newblock.Time = 10000
+			blocks = append(blocks, &newblock)
+		} else {
+			// Use NextRandomRef for timestamp coherence.
+			newblock := testutils.NextRandomRef(&r, *blocks[len(blocks)-1])
+			if r.Intn(100) < p.sameTimestampFrequency {
+				if timeStampCount < p.chainCount {
+					newblock.Time = blocks[len(blocks)-1].Time
+					timeStampCount++
+				} else {
+					timeStampCount = 1
+				}
+			}
+			blocks = append(blocks, &newblock)
+		}
+	}
+	return blocks
+}
+
+func (p *ChainRandomizerParams) assignBlocksToL2(blocks []*eth.BlockRef) {
+	r := *p.r
+	var prevBlock *eth.BlockRef
+	var prevChain eth.ChainID
+	var chainSelections map[eth.ChainID]struct{} = make(map[eth.ChainID]struct{}, 0)
+
+	for i, block := range blocks {
+		if i != 0 && prevBlock.Time == block.Time {
+			delete(chainSelections, prevChain)
+		} else {
+			for _, chainid := range p.chainIDs {
+				chainSelections[chainid] = struct{}{}
+			}
+		}
+		keys := make([]eth.ChainID, 0, len(chainSelections))
+		for ci := range chainSelections {
+			keys = append(keys, ci)
+		}
+		chainid := keys[r.Intn(len(keys))]
+
+		if len(p.chainBlocks[chainid]) == 0 {
+			block.Number = 0
+			block.ParentHash = common.Hash{}
+		} else {
+			chainBlocks := p.chainBlocks[chainid]
+			lastblock := chainBlocks[len(chainBlocks)-1]
+			block.Number = lastblock.Number + 1
+			block.ParentHash = lastblock.Hash
+		}
+
+		p.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
+		p.chainBlocks[chainid] = append(p.chainBlocks[chainid], block)
+		prevChain = chainid
+		prevBlock = block
+	}
+}
+
+func TestChainGeneration(t *testing.T) {
+	// Set up chain
+	chainCount := 4
+	p := NewChainRandomizer(chainCount, 50, 100, 30, 42)
+	blocks := p.makeChainArray()
+	p.assignBlocksToL2(blocks)
+	for _, block := range blocks {
+		t.Log("Block: ", block.Number, block.Time)
+	}
+	/*
+		for _, chain := range p.chainIDs {
+			for _, block := range p.chainBlocks[chain] {
+				t.Log("block for chain: ", chain, block.Number, block.Time)
+			}
+		} */
+
+	// Set up backend
+	logger := testlog.Logger(t, log.LvlInfo)
+	m := metrics.NoopMetrics
+	dataDir := t.TempDir()
+	fullCfgSet := fullConfigSet(t, chainCount)
+	rollupCfgSet := fullCfgSet.RollupConfigSet.(depset.StaticRollupConfigSet)
+
+	for _, chain := range p.chainIDs {
+		anchor := p.chainBlocks[chain][0]
+		rollupCfgSet[chain].Genesis = depset.Genesis{
+			L2: types.BlockSealFromRef(*anchor),
+		}
+	}
+
+	cfg := &config.Config{
+		Version:               "test",
+		FullConfigSetSource:   fullCfgSet,
+		SynchronousProcessors: true,
+		MockRun:               false,
+		SyncSources:           &syncnode.CLISyncNodes{},
+		Datadir:               dataDir,
+	}
+
+	ex := event.NewGlobalSynchronous(context.Background())
+	b, err := NewSupervisorBackend(context.Background(), logger, m, cfg, ex)
+	require.NoError(t, err)
+	t.Log("initialized!")
+
+	err = b.Start(context.Background())
+	require.NoError(t, err)
+	t.Log("started!")
+
+	for _, chain := range p.chainIDs {
+		require.NoError(t, b.AttachProcessorSource(chain, p.chainSources[chain]))
+	}
+}
+
 func TestWrongScopeBump(t *testing.T) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	m := metrics.NoopMetrics
@@ -172,7 +327,7 @@ func TestWrongScopeBump(t *testing.T) {
 	require.NoError(t, ex.Drain())
 	t.Log("Done Emitting LocalSafeUpdateEvent!")
 
-	rcpt = rcpt_w_exec(chainA, blockA1, common.Address{0xaa}, 0, log1)
+	rcpt = rcpt_w_exec(chainA, blockA1, 0, log1)
 
 	blockB1 := eth.BlockRef{
 		Hash:       common.Hash{0xbb},
