@@ -27,7 +27,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
-func FuzzCrossUpdate(f *testing.F) {
+func FuzzCrossUnsafeUpdateInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1)) // Add initial values for fuzzing
 
@@ -48,11 +48,11 @@ func FuzzCrossUpdate(f *testing.F) {
 			crossSafeHeadIndex = 0
 		}
 
-		crossUnsafeHead, localSafeHead, crossSafeHead := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		crossUnsafeHead, _, _ := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		t.Run("Cross Unsafe Update", func(t *testing.T) {
-			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
+			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.UpdateCrossUnsafeRequestEvent{
 					ChainID: chainA,
@@ -72,8 +72,39 @@ func FuzzCrossUpdate(f *testing.F) {
 
 		})
 
+		err := b.Stop(context.Background())
+		require.NoError(t, err)
+		t.Log("stopped!")
+	})
+
+}
+
+func FuzzCrossSafeUpdateInvariants(f *testing.F) {
+
+	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1)) // Add initial values for fuzzing
+
+	f.Fuzz(func(t *testing.T, chainALength uint64, chainBLength uint64, crossUnsafeHeadIndex uint64, localSafeHeadIndex uint64, crossSafeHeadIndex uint64) {
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
+		chainA := eth.ChainIDFromUInt64(900)
+		chainB := eth.ChainIDFromUInt64(901)
+
+		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
+
+		chainALength = chainALength%10 + 1 // ChainA can't be empty
+		//chainBLength = chainBLength % 10
+		crossUnsafeHeadIndex = crossUnsafeHeadIndex % chainALength
+		localSafeHeadIndex = localSafeHeadIndex % chainALength
+		if localSafeHeadIndex > 0 {
+			crossSafeHeadIndex = crossSafeHeadIndex % localSafeHeadIndex
+		} else {
+			crossSafeHeadIndex = 0
+		}
+
+		crossUnsafeHead, _, _ := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+
 		t.Run("Cross Safe Update", func(t *testing.T) {
-			InitialState(t, b, chainA, crossUnsafeHead, localSafeHead, crossSafeHead)
+			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.UpdateCrossSafeRequestEvent{
 					ChainID: chainA,
@@ -270,12 +301,24 @@ func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChain
 	}
 }
 
-func InitialState(t *testing.T, b *SupervisorBackend, chainA eth.ChainID, crossUnsafeHead types.BlockSeal, localSafeHead eth.BlockRef, crossSafeHead eth.BlockRef) {
+func InitialState(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, chainA eth.ChainID, crossUnsafeHead types.BlockSeal, crossSafeHeadIndex uint64) {
 	err := b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
 	require.NoError(t, err)
 
-	//err = b.chainDBs.UpdateCrossSafe(chainA, crossSafeHead, crossSafeHead)
-	//require.NoError(t, err)
+	for i := 0; i < int(crossSafeHeadIndex); i++ {
+		ex.Enqueue(event.AnnotatedEvent{
+			Event: superevents.UpdateCrossSafeRequestEvent{
+				ChainID: chainA,
+			},
+			EmitPriority: event.High,
+		})
+
+		require.NoError(t, ex.DrainUntil(
+			func(ev event.Event) bool {
+				// We expect the UpdateCrossUnsafeRequestEvent to be emitted
+				return ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chainA}
+			}, false))
+	}
 
 	t.Log("Initial state for Chain A")
 
