@@ -65,6 +65,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 		//chainBLength = chainBLength % 10
 
 		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
@@ -98,7 +99,7 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, chainALength uint64, chainBLength uint64, crossUnsafeHeadIndex uint64, localSafeHeadIndex uint64, crossSafeHeadIndex uint64) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
@@ -108,6 +109,7 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 		//chainBLength = chainBLength % 10
 
 		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		t.Run("UpdateCrossSafeRequestEvent", func(t *testing.T) {
@@ -148,7 +150,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 		localSafeHeadIndex uint64,
 		crossSafeHeadIndex uint64,
 		equalUnsafeChain bool) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d, Cross Unsafe Head Index: %d", chainALength, chainBLength, crossUnsafeHeadIndex)
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
@@ -158,6 +160,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 		//chainBLength = chainBLength % 10
 
 		crossUnsafeHead, localSafeHeadIndex, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		t.Run("LocalSafeUpdateEvent Event", func(t *testing.T) {
@@ -219,6 +222,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		//chainBLength = chainBLength % 10
 
 		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
@@ -282,6 +286,73 @@ func FuzzEventsPreserveState(f *testing.F) {
 					return ev == superevents.CrossSafeUpdateEvent{ChainID: chainA}
 				}, false))
 			t.Log("CrossSafeUpdateEvent processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		err := b.Stop(context.Background())
+		require.NoError(t, err)
+		t.Log("stopped!")
+	})
+
+}
+
+func FuzzChainProcessEventInvariants(f *testing.F) {
+
+	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), uint64(7)) // Add initial values for fuzzing
+
+	f.Fuzz(func(t *testing.T,
+		chainALength uint64,
+		chainBLength uint64,
+		crossUnsafeHeadIndex uint64,
+		localSafeHeadIndex uint64,
+		crossSafeHeadIndex uint64,
+		target uint64) {
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
+		chainA := eth.ChainIDFromUInt64(900)
+		chainB := eth.ChainIDFromUInt64(901)
+
+		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
+
+		chainALength = chainALength%10 + 1 // ChainA can't be empty
+		target = target % (chainALength + 2)
+		//chainBLength = chainBLength % 10
+
+		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+
+		t.Run("ChainProcessEvent Event", func(t *testing.T) {
+			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+			newLocalUnsafe := eth.BlockRef{
+				Hash:       common.BytesToHash([]byte{0xaa, byte(target)}),
+				Number:     target,
+				ParentHash: common.BytesToHash([]byte{0xaa, byte(target - 1)}),
+				Time:       uint64(time.Now().Add(time.Duration(target*5) * time.Minute).Unix()),
+			}
+
+			t.Logf("Chain A block %d: %s\t Timestamp:%d", target, newLocalUnsafe.Hash.Hex(), newLocalUnsafe.Time)
+
+			srcChainA.ExpectBlockRefByNumber(uint64(chainALength), newLocalUnsafe, nil)
+			srcChainA.ExpectFetchReceipts(newLocalUnsafe.Hash, nil, nil)
+
+			srcChainA.ExpectBlockRefByNumber(uint64(chainALength+1), eth.L1BlockRef{}, ethereum.NotFound)
+
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.ChainProcessEvent{
+					ChainID: chainA,
+					Target:  target,
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.ChainProcessEvent{
+						ChainID: chainA,
+						Target:  target,
+					}
+				}, false))
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
@@ -364,6 +435,11 @@ func ChainAInit(t *testing.T,
 		crossSafeHeadIndex = 0
 	}
 
+	t.Logf("Local-Unsafe Number: %d", chainALength-1)
+	t.Logf("Cross-Unsafe Number: %d", crossUnsafeHeadIndex)
+	t.Logf("Local-Safe Number: %d", localSafeHeadIndex)
+	t.Logf("Cross-Safe Number: %d", crossSafeHeadIndex)
+
 	// Initialize the chainA source with a genesis block
 	block := eth.BlockRef{
 		Hash:       common.BytesToHash([]byte{0xaa, 0x00}),
@@ -420,12 +496,11 @@ func ChainAInit(t *testing.T,
 			})
 		}
 	}
-	srcChainA.ExpectBlockRefByNumber(uint64(i), eth.L1BlockRef{}, ethereum.NotFound)
 
-	require.NoError(t, ex.DrainUntil(
+	ex.DrainUntil(
 		func(ev event.Event) bool {
 			return ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chainA}
-		}, true))
+		}, true)
 
 	return types.BlockSealFromRef(crossUnsafeHead), localSafeHeadIndex, crossSafeHeadIndex
 }
