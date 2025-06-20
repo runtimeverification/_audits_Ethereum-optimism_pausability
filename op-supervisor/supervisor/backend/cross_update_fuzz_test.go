@@ -27,6 +27,29 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
+// Missing:
+// 1 - ChainProcessEvent
+// 2 - LocalUnsafeUpdateEvent
+// 4 - FinalizedL1RequestEvent
+// 5 - FinalizedL1UpdateEvent
+// 6 - FinalizedL2UpdateEvent
+// 7 - LocalUnsafeReceivedEvent
+// 8 - LocalDerivedEvent
+// 9 - LocalDerivedOriginUpdateEvent
+// 10 - AnchorEvent
+// 11 - InvalidateLocalSafeEvent
+// 12 - RewindL1Event
+// 13 - ReplaceBlockEvent
+// 14 - ChainRewoundEvent
+// 15 - UpdateLocalSafeFailedEvent
+
+// Done:
+// 1 - UpdateCrossUnsafeRequestEvent
+// 2 - CrossUnsafeUpdateEvent
+// 3 - UpdateCrossSafeRequestEvent
+// 4 - LocalSafeUpdateEvent
+// 5 - CrossSafeUpdateEvent
+
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
@@ -57,7 +80,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 				func(ev event.Event) bool {
 					return ev == superevents.UpdateCrossUnsafeRequestEvent{ChainID: chainA}
 				}, false))
-			t.Log("Cross Unsafe Update processed")
+			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
@@ -79,7 +102,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 				func(ev event.Event) bool {
 					return ev == superevents.CrossUnsafeUpdateEvent{ChainID: chainA}
 				}, false))
-			t.Log("Cross Unsafe Update processed")
+			t.Log("CrossUnsafeUpdateEvent processed")
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
@@ -109,7 +132,7 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
-		t.Run("Update Cross-Safe Request Event", func(t *testing.T) {
+		t.Run("UpdateCrossSafeRequestEvent", func(t *testing.T) {
 			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.UpdateCrossSafeRequestEvent{
@@ -122,6 +145,29 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 				func(ev event.Event) bool {
 					return ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chainA}
 				}, false))
+
+			t.Log("UpdateCrossSafeRequestEvent processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		t.Run("CrossSafeUpdateEvent", func(t *testing.T) {
+			// CrossUnsafeUpdateEvent does not change the state of the supervisor backend,
+			// when handled it just emits an UpdateCrossUnsafeRequestEvent.
+			// Therefore all invariants must hold even when the CrossUnsafeUpdateEvent is processed.
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.CrossSafeUpdateEvent{
+					ChainID: chainA,
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.CrossSafeUpdateEvent{ChainID: chainA}
+				}, false))
+			t.Log("CrossSafeUpdateEvent processed")
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
