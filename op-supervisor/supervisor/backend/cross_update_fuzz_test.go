@@ -30,7 +30,6 @@ import (
 // Missing:
 
 // 4 - FinalizedL1RequestEvent
-// 6 - FinalizedL2UpdateEvent
 // 8 - LocalDerivedEvent
 // 9 - LocalDerivedOriginUpdateEvent
 // 10 - AnchorEvent
@@ -50,6 +49,7 @@ import (
 // 7 - ChainProcessEvent
 // 8 - LocalUnsafeReceivedEvent
 // 9 - FinalizedL1UpdateEvent
+// 10 - FinalizedL2UpdateEvent
 
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
@@ -327,6 +327,31 @@ func FuzzEventsPreserveState(f *testing.F) {
 			require.NoError(t, ex.DrainUntil(
 				func(ev event.Event) bool {
 					return ev == superevents.FinalizedL1UpdateEvent{FinalizedL1: eth.BlockRef{}}
+				}, false))
+			t.Log("FinalizedL1UpdateEvent processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		t.Run("FinalizedL2UpdateEvent", func(t *testing.T) {
+			// CrossUnsafeUpdateEvent does not change the state of the supervisor backend,
+			// when handled it just emits an UpdateCrossUnsafeRequestEvent.
+			// Therefore all invariants must hold even when the CrossUnsafeUpdateEvent is processed.
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.FinalizedL2UpdateEvent{
+					ChainID:     chainA,
+					FinalizedL2: types.BlockSeal{},
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.FinalizedL2UpdateEvent{
+						ChainID:     chainA,
+						FinalizedL2: types.BlockSeal{},
+					}
 				}, false))
 			t.Log("FinalizedL1UpdateEvent processed")
 
