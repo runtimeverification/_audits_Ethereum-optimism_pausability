@@ -104,6 +104,12 @@ type RandomChain struct {
 	chainHeads   map[eth.ChainID]*ChainHeads
 }
 
+func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, heads ChainHeads) {
+	blocks = rc.chainBlocks[chainid]
+	heads = *rc.chainHeads[chainid]
+	return blocks, heads
+}
+
 func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	r := rand.New(rand.NewSource(seed))
 	totalLength := r.Intn(p.maxLength-p.minLength) + p.minLength
@@ -236,6 +242,33 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	}
 
 	return res
+}
+
+func FuzzRandomChains(f *testing.F) {
+	params := RandomChainParams{
+		chainCount: 4,
+		minLength:  50,
+		maxLength:  100,
+
+		sameTimestampFrequency: 60,
+		dependencyChance:       20,
+	}
+	f.Add(int64(30))
+
+	f.Fuzz(func(t *testing.T, seed int64) {
+		randomChain := params.MakeRandomChain(seed)
+
+		for i, cb := range randomChain.allBlocks {
+			if cb.block.Number == randomChain.chainHeads[cb.chain].crossSafe {
+				t.Log("    ", cb.chain, cb.block.Time, " <---- Cross Safe Head")
+			} else {
+				t.Log("    ", cb.chain, cb.block.Time)
+			}
+			if i == randomChain.cutoff {
+				t.Log("    --- Cutoff point ---")
+			}
+		}
+	})
 }
 
 func TestBackendLifetime_InteropAtGenesis(t *testing.T) {
