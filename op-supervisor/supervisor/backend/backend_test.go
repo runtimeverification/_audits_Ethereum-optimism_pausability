@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"path/filepath"
 	"testing"
 
@@ -70,6 +71,171 @@ func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log 
 		Data:    data,
 		Topics:  topics,
 	}
+}
+
+type ChainBlock struct {
+	chain eth.ChainID
+	block *eth.BlockRef
+}
+
+type ChainHeads struct {
+	localSafe   uint64 // <= chain length
+	localUnsafe uint64 // <= chain length
+	crossSafe   uint64 // <= localSafe
+	crossUnsafe uint64 // <= localUnsafe
+}
+
+type RandomChainParams struct {
+	chainCount int
+
+	minLength int
+	maxLength int
+
+	sameTimestampFrequency int // Percentage [0-100]
+	dependencyChance       int // Percentage [0-100]
+}
+
+type RandomChain struct {
+	cutoff       int
+	chainIDs     []eth.ChainID
+	allBlocks    []*ChainBlock
+	chainSources map[eth.ChainID]*MockProcessorSource
+	chainBlocks  map[eth.ChainID][]*eth.BlockRef
+	chainHeads   map[eth.ChainID]*ChainHeads
+}
+
+func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
+	r := rand.New(rand.NewSource(seed))
+	totalLength := r.Intn(p.maxLength-p.minLength) + p.minLength
+
+	res = RandomChain{
+		cutoff:       r.Intn(totalLength),
+		chainIDs:     make([]eth.ChainID, 0, p.chainCount),
+		allBlocks:    make([]*ChainBlock, 0, totalLength),
+		chainSources: make(map[eth.ChainID]*MockProcessorSource),
+		chainBlocks:  make(map[eth.ChainID][]*eth.BlockRef),
+		chainHeads:   make(map[eth.ChainID]*ChainHeads),
+	}
+
+	for i := range p.chainCount {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+		res.chainBlocks[chain] = make([]*eth.BlockRef, 0)
+		res.chainSources[chain] = &MockProcessorSource{}
+		res.chainHeads[chain] = &ChainHeads{}
+		res.chainIDs = append(res.chainIDs, chain)
+	}
+
+	//
+	// Create array of all blocks
+	//
+	chainUninit := eth.ChainIDFromUInt64(0)
+	timeStampCount := 1 // Can't be greater than p.chainCount
+	var newBlock *ChainBlock
+	for i := range totalLength {
+		allBlocks := res.allBlocks
+		if i == 0 {
+			randomBlock := testutils.RandomBlockRef(r)
+			randomBlock.Time = 10000
+			newBlock = &ChainBlock{chainUninit, &randomBlock}
+		} else {
+			// Use NextRandomRef for timestamp coherence.
+			randomBlock := testutils.NextRandomRef(r, *allBlocks[len(allBlocks)-1].block)
+			if r.Intn(100) < p.sameTimestampFrequency && timeStampCount < p.chainCount {
+				randomBlock.Time = allBlocks[len(allBlocks)-1].block.Time
+				timeStampCount++
+			} else {
+				randomBlock.Time += 1 // Increment because NextRandomRef could return a block with the same timestamp
+				timeStampCount = 1
+			}
+			newBlock = &ChainBlock{chainUninit, &randomBlock}
+		}
+		res.allBlocks = append(res.allBlocks, newBlock)
+	}
+
+	//
+	// Assign blocks to random L2 chains
+	//
+	chainSelections := make([]eth.ChainID, p.chainCount)
+	copy(chainSelections, res.chainIDs)
+	shuffleChains := func() {
+		r.Shuffle(len(chainSelections), func(i, j int) {
+			chainSelections[i], chainSelections[j] = chainSelections[j], chainSelections[i]
+		})
+	}
+
+	nextChain := 0
+	var prevBlock *eth.BlockRef
+	for i, cb := range res.allBlocks {
+		block := cb.block
+		if i == 0 || prevBlock.Time != block.Time {
+			shuffleChains()
+			nextChain = 0
+		}
+		chainid := chainSelections[nextChain]
+		cb.chain = chainid
+		nextChain++
+
+		if len(res.chainBlocks[chainid]) == 0 {
+			block.Number = 0
+			block.ParentHash = common.Hash{}
+		} else {
+			chainBlocks := res.chainBlocks[chainid]
+			lastblock := chainBlocks[len(chainBlocks)-1]
+			block.Number = lastblock.Number + 1
+			block.ParentHash = lastblock.Hash
+		}
+
+		if i <= res.cutoff {
+			chainHeads := res.chainHeads[chainid]
+			chainHeads.crossSafe = block.Number
+			chainHeads.crossUnsafe = block.Number
+		}
+
+		res.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
+		res.chainBlocks[chainid] = append(res.chainBlocks[chainid], block)
+		prevBlock = block
+	}
+
+	// Determine the local safe/unsafe heads for each chain
+	for chain, blocks := range res.chainBlocks {
+		chainLength := len(blocks)
+		lastBlockNumber := blocks[chainLength-1].Number
+		res.chainHeads[chain].localSafe = lastBlockNumber
+		res.chainHeads[chain].localUnsafe = lastBlockNumber
+	}
+
+	//
+	// Create random dependencies between all blocks
+	//
+	generatedLogs := make([][]*types2.Log, totalLength)
+	for initIndex, cb := range res.allBlocks {
+		block := cb.block
+		if block.Number == 0 {
+			continue
+		}
+		for r.Intn(100) < p.dependencyChance {
+			execIndex := r.Intn(totalLength-initIndex) + initIndex
+			cb := res.allBlocks[execIndex]
+			execChain, execBlock := cb.chain, cb.block
+			initiatingLog := testutils.RandomLog(r)
+			initiatingLog.Index = uint(len(generatedLogs[initIndex]))
+			execLog := ExecMsgForLog(execChain, *execBlock, uint32(len(generatedLogs[execIndex])), initiatingLog)
+			execLog.Index = uint(len(generatedLogs[execIndex]))
+			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
+			generatedLogs[execIndex] = append(generatedLogs[execIndex], execLog)
+		}
+	}
+	for i, logs := range generatedLogs {
+		cb := res.allBlocks[i]
+		chain, block := cb.chain, cb.block
+		rcpt := types2.Receipt{
+			Logs: logs,
+		}
+		source := res.chainSources[chain]
+		source.ExpectFetchReceipts(block.Hash, types2.Receipts{&rcpt}, nil)
+	}
+
+	return res
 }
 
 func TestBackendLifetime_InteropAtGenesis(t *testing.T) {
