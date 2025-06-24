@@ -30,7 +30,6 @@ import (
 // Missing:
 
 // 4 - FinalizedL1RequestEvent
-// 8 - LocalDerivedEvent
 // 9 - LocalDerivedOriginUpdateEvent
 // 10 - AnchorEvent
 // 12 - RewindL1Event
@@ -50,6 +49,7 @@ import (
 // 11 - InvalidateLocalSafeEvent
 // 12 - ChainRewoundEvent
 // 13 - UpdateLocalSafeFailedEvent
+// 14 - LocalDerivedEvent
 
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
@@ -206,6 +206,70 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 		t.Log("stopped!")
 	})
 
+}
+
+func FuzzLocalDerivedEventnvariants(f *testing.F) {
+
+	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), uint64(3)) // Add initial values for fuzzing
+
+	f.Fuzz(func(t *testing.T,
+		chainALength uint64,
+		chainBLength uint64,
+		crossUnsafeHeadIndex uint64,
+		localSafeHeadIndex uint64,
+		crossSafeHeadIndex uint64,
+		localSafetoUpdate uint64) {
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
+		chainA := eth.ChainIDFromUInt64(900)
+		chainB := eth.ChainIDFromUInt64(901)
+
+		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
+
+		chainALength = chainALength%10 + 1 // ChainA can't be empty
+		//chainBLength = chainBLength % 10
+
+		crossUnsafeHead, localSafeHeadIndex, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
+		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+
+		t.Run("LocalDerivedEvent Event", func(t *testing.T) {
+			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+			localSafetoUpdate = localSafetoUpdate % (localSafeHeadIndex + 3) // Allow it to be greater than the next current local safe head
+			derived := types.DerivedBlockRefPair{
+				Derived: eth.BlockRef{
+					Hash:       common.BytesToHash([]byte{0xaa, byte(localSafetoUpdate)}),
+					Number:     localSafetoUpdate,
+					ParentHash: common.BytesToHash([]byte{0xaa, byte(localSafetoUpdate) - 1}),
+					Time:       uint64(time.Now().Unix()),
+				},
+				Source: eth.BlockRef{},
+			}
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.LocalDerivedEvent{
+					ChainID: chainA,
+					Derived: derived,
+					NodeID:  "test-node",
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.LocalDerivedEvent{
+						ChainID: chainA,
+						Derived: derived,
+						NodeID:  "test-node",
+					}
+				}, false))
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		err := b.Stop(context.Background())
+		require.NoError(t, err)
+		t.Log("stopped!")
+	})
 }
 
 func FuzzEventsPreserveState(f *testing.F) {
