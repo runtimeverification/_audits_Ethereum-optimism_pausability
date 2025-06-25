@@ -100,6 +100,7 @@ type RandomChain struct {
 	cutoff       int
 	chainIDs     []eth.ChainID
 	allBlocks    []*ChainBlock
+	dependencies map[ChainBlock][]*ChainBlock
 	chainSources map[eth.ChainID]*MockProcessorSource
 	chainBlocks  map[eth.ChainID][]*eth.BlockRef
 	chainHeads   map[eth.ChainID]*ChainHeads
@@ -119,6 +120,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		cutoff:       r.Intn(totalLength),
 		chainIDs:     make([]eth.ChainID, 0, p.chainCount),
 		allBlocks:    make([]*ChainBlock, 0, totalLength),
+		dependencies: make(map[ChainBlock][]*ChainBlock),
 		chainSources: make(map[eth.ChainID]*MockProcessorSource),
 		chainBlocks:  make(map[eth.ChainID][]*eth.BlockRef),
 		chainHeads:   make(map[eth.ChainID]*ChainHeads),
@@ -219,21 +221,22 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	// Create random dependencies between all blocks
 	//
 	generatedLogs := make([][]*types2.Log, totalLength)
-	for initIndex, cb := range res.allBlocks {
-		block := cb.block
+	for initIndex, initcb := range res.allBlocks {
+		block := initcb.block
 		if block.Number == 0 {
 			continue
 		}
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := r.Intn(totalLength-initIndex) + initIndex
-			cb := res.allBlocks[execIndex]
-			execChain, execBlock := cb.chain, cb.block
+			execcb := res.allBlocks[execIndex]
+			execChain, execBlock := execcb.chain, execcb.block
 			initiatingLog := testutils.RandomLog(r)
 			initiatingLog.Index = uint(len(generatedLogs[initIndex]))
 			execLog := ExecMsgForLog(execChain, *execBlock, uint32(len(generatedLogs[execIndex])), initiatingLog)
 			execLog.Index = uint(len(generatedLogs[execIndex]))
 			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
 			generatedLogs[execIndex] = append(generatedLogs[execIndex], execLog)
+			res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 		}
 	}
 	for i, logs := range generatedLogs {
@@ -277,9 +280,15 @@ func FuzzRandomChains(f *testing.F) {
 			if cb.block.Number == randomChain.chainHeads[cb.chain].localUnsafe {
 				head += " <-- Local Unsafe"
 			}
-			t.Log("    ", cb.chain, cb.block.Time, head)
+			t.Logf("    %s, %2d, %d, %s", cb.chain, cb.block.Number, cb.block.Time, head)
 			if i == randomChain.cutoff {
 				t.Log("    --- Cutoff point ---")
+			}
+		}
+
+		for exec, inits := range randomChain.dependencies {
+			for _, init := range inits {
+				t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
 			}
 		}
 	})
