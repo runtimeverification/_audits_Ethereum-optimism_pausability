@@ -32,7 +32,6 @@ import (
 // 4 - FinalizedL1RequestEvent
 // 10 - AnchorEvent
 // 12 - RewindL1Event
-// 13 - ReplaceBlockEvent
 
 // Done:
 // 1 - UpdateCrossUnsafeRequestEvent
@@ -50,6 +49,7 @@ import (
 // 13 - UpdateLocalSafeFailedEvent
 // 14 - LocalDerivedEvent
 // 15 - LocalDerivedOriginUpdateEvent
+// 16 - ReplaceBlockEvent
 
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
@@ -208,7 +208,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 }
 
-func FuzzLocalDerivedEventnvariants(f *testing.F) {
+func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), uint64(3)) // Add initial values for fuzzing
 
@@ -259,6 +259,81 @@ func FuzzLocalDerivedEventnvariants(f *testing.F) {
 						ChainID: chainA,
 						Derived: derived,
 						NodeID:  "test-node",
+					}
+				}, false))
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		err := b.Stop(context.Background())
+		require.NoError(t, err)
+		t.Log("stopped!")
+	})
+}
+
+func FuzzReplaceBlockEventInvariants(f *testing.F) {
+
+	f.Add(uint64(5), uint64(2), uint64(4), uint64(3), uint64(1)) // Add initial values for fuzzing
+
+	f.Fuzz(func(t *testing.T,
+		chainALength uint64,
+		chainBLength uint64,
+		crossUnsafeHeadIndex uint64,
+		localSafeHeadIndex uint64,
+		crossSafeHeadIndex uint64) {
+		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
+		chainA := eth.ChainIDFromUInt64(900)
+		chainB := eth.ChainIDFromUInt64(901)
+
+		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
+
+		chainALength = chainALength%10 + 1 // ChainA can't be empty
+		//chainBLength = chainBLength % 10
+
+		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
+		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+
+		t.Run("ReplaceBlockEvent Event", func(t *testing.T) {
+			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+
+			invalidated := types.DerivedBlockRefPair{
+				Derived: eth.BlockRef{
+					Hash:       common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex) + 1}),
+					Number:     crossSafeHeadIndex + 1,
+					ParentHash: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex)}),
+					Time:       uint64(time.Now().Add(time.Duration((crossSafeHeadIndex+1)*5) * time.Minute).Unix()),
+				},
+				Source: eth.BlockRef{},
+			}
+			b.chainDBs.InvalidateLocalSafe(chainA, invalidated)
+
+			replacementBlock := eth.BlockRef{
+				Hash:       common.BytesToHash([]byte{0xbb, byte(crossSafeHeadIndex) + 1}),
+				Number:     crossSafeHeadIndex + 1,
+				ParentHash: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex)}),
+				Time:       uint64(time.Now().Add(time.Duration((crossSafeHeadIndex+1)*10) * time.Minute).Unix()),
+			}
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.ReplaceBlockEvent{
+					ChainID: chainA,
+					Replacement: types.BlockReplacement{
+						Replacement: replacementBlock,
+						Invalidated: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex + 1)}),
+					},
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.ReplaceBlockEvent{
+						ChainID: chainA,
+						Replacement: types.BlockReplacement{
+							Replacement: replacementBlock,
+							Invalidated: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex + 1)}),
+						},
 					}
 				}, false))
 
