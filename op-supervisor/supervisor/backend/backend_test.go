@@ -79,6 +79,7 @@ type ChainBlock struct {
 }
 
 type ChainHeads struct {
+	// These are block numbers on the chain
 	localSafe   uint64 // <= chain length
 	localUnsafe uint64 // <= chain length
 	crossSafe   uint64 // <= localSafe
@@ -171,6 +172,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 
 	nextChain := 0
 	var prevBlock *eth.BlockRef
+	chainCutoffs := make(map[eth.ChainID]uint64)
 	for i, cb := range res.allBlocks {
 		block := cb.block
 		if i == 0 || prevBlock.Time != block.Time {
@@ -192,9 +194,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		}
 
 		if i <= res.cutoff {
-			chainHeads := res.chainHeads[chainid]
-			chainHeads.crossSafe = block.Number
-			chainHeads.crossUnsafe = block.Number
+			chainCutoffs[chainid] = block.Number
 		}
 
 		res.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
@@ -204,10 +204,15 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 
 	// Determine the local safe/unsafe heads for each chain
 	for chain, blocks := range res.chainBlocks {
+		cutoff := int(chainCutoffs[chain])
+		heads := res.chainHeads[chain]
 		chainLength := len(blocks)
-		lastBlockNumber := blocks[chainLength-1].Number
-		res.chainHeads[chain].localSafe = lastBlockNumber
-		res.chainHeads[chain].localUnsafe = lastBlockNumber
+		lastBlockNumber := int(blocks[chainLength-1].Number)
+		heads.localSafe = uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
+		heads.localUnsafe = uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
+
+		heads.crossSafe = uint64(r.Intn(int(cutoff + 1)))
+		heads.crossUnsafe = uint64(r.Intn(int(cutoff + 1)))
 	}
 
 	//
@@ -259,11 +264,20 @@ func FuzzRandomChains(f *testing.F) {
 		randomChain := params.MakeRandomChain(seed)
 
 		for i, cb := range randomChain.allBlocks {
+			head := ""
 			if cb.block.Number == randomChain.chainHeads[cb.chain].crossSafe {
-				t.Log("    ", cb.chain, cb.block.Time, " <---- Cross Safe Head")
-			} else {
-				t.Log("    ", cb.chain, cb.block.Time)
+				head += " <-- Cross Safe"
 			}
+			if cb.block.Number == randomChain.chainHeads[cb.chain].crossUnsafe {
+				head += " <-- Cross Unsafe"
+			}
+			if cb.block.Number == randomChain.chainHeads[cb.chain].localSafe {
+				head += " <-- Local Safe"
+			}
+			if cb.block.Number == randomChain.chainHeads[cb.chain].localUnsafe {
+				head += " <-- Local Unsafe"
+			}
+			t.Log("    ", cb.chain, cb.block.Time, head)
 			if i == randomChain.cutoff {
 				t.Log("    --- Cutoff point ---")
 			}
