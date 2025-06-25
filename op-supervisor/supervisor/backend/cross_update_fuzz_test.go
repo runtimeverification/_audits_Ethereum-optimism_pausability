@@ -28,8 +28,6 @@ import (
 )
 
 // Missing:
-
-// 4 - FinalizedL1RequestEvent
 // 10 - AnchorEvent
 // 12 - RewindL1Event
 
@@ -50,6 +48,7 @@ import (
 // 14 - LocalDerivedEvent
 // 15 - LocalDerivedOriginUpdateEvent
 // 16 - ReplaceBlockEvent
+// 17 - FinalizedL1RequestEvent
 
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
@@ -555,6 +554,22 @@ func FuzzEventsPreserveState(f *testing.F) {
 					}
 				}, false))
 			t.Log("LocalDerivedOriginUpdateEvent processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
+			ex.Enqueue(event.AnnotatedEvent{
+				Event:        superevents.FinalizedL1RequestEvent{},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.FinalizedL1RequestEvent{}
+				}, false))
+			t.Log("FinalizedL1RequestEvent processed")
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
