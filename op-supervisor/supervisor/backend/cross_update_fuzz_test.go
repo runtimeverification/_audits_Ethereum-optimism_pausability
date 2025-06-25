@@ -30,7 +30,6 @@ import (
 // Missing:
 
 // 4 - FinalizedL1RequestEvent
-// 9 - LocalDerivedOriginUpdateEvent
 // 10 - AnchorEvent
 // 12 - RewindL1Event
 // 13 - ReplaceBlockEvent
@@ -50,6 +49,7 @@ import (
 // 12 - ChainRewoundEvent
 // 13 - UpdateLocalSafeFailedEvent
 // 14 - LocalDerivedEvent
+// 15 - LocalDerivedOriginUpdateEvent
 
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
@@ -460,6 +460,26 @@ func FuzzEventsPreserveState(f *testing.F) {
 					}
 				}, false))
 			t.Log("UpdateLocalSafeFailedEvent processed")
+
+			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
+			CrossSafe_LE_LocalSafe(t, b, chainA)
+		})
+
+		t.Run("LocalDerivedOriginUpdateEvent", func(t *testing.T) {
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.LocalDerivedOriginUpdateEvent{
+					ChainID: chainA,
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.LocalDerivedOriginUpdateEvent{
+						ChainID: chainA,
+					}
+				}, false))
+			t.Log("LocalDerivedOriginUpdateEvent processed")
 
 			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
 			CrossSafe_LE_LocalSafe(t, b, chainA)
