@@ -50,26 +50,35 @@ import (
 // 16 - ReplaceBlockEvent
 // 17 - FinalizedL1RequestEvent
 
+var chainParams = RandomChainParams{
+	chainCount: 3,
+	minLength:  50,
+	maxLength:  100,
+
+	sameTimestampFrequency: 60,
+	dependencyChance:       20,
+}
+
 func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
-	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
+	f.Add(int64(30)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T, chainALength uint64, chainBLength uint64, crossUnsafeHeadIndex uint64, localSafeHeadIndex uint64, crossSafeHeadIndex uint64) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
+	f.Fuzz(func(t *testing.T, seed int64) {
+		randomChain := chainParams.MakeRandomChain(seed)
+
 		chainA := eth.ChainIDFromUInt64(900)
 		chainB := eth.ChainIDFromUInt64(901)
 
-		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
+		ex, b, _, _, _ := ExecutorBackendInit(t, chainA, chainB)
 
-		chainALength = chainALength%10 + 1 // ChainA can't be empty
-		//chainBLength = chainBLength % 10
+		ChainsInit(t, b, ex, randomChain)
 
-		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
-		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
+		//crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
+		//srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
 		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
 
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
-			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+			//InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.UpdateCrossUnsafeRequestEvent{
 					ChainID: chainA,
@@ -688,17 +697,31 @@ func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (
 	l1Src = &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
 
-	srcChainA = &MockProcessorSource{}
-	require.NoError(t, b.AttachProcessorSource(chainA, srcChainA))
-
-	srcChainB = &MockProcessorSource{}
-	require.NoError(t, b.AttachProcessorSource(chainB, srcChainB))
+	for i := 0; i < chainParams.chainCount; i++ {
+		srcChain := &MockProcessorSource{}
+		require.NoError(t, b.AttachProcessorSource(chainA, srcChain))
+	}
 
 	err = b.Start(context.Background())
 	require.NoError(t, err)
 	t.Log("started!")
 
 	return ex, b, l1Src, srcChainA, srcChainB
+}
+
+func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
+	for i := 0; i < chainParams.chainCount; i++ {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+		anchor := randomChain.chainBlocks[chain][0]
+		b.emitter.Emit(superevents.AnchorEvent{
+			ChainID: chain,
+			Anchor: types.DerivedBlockRefPair{
+				Derived: *anchor,
+				Source:  eth.L1BlockRef{},
+			}})
+		t.Logf("Chain %d genesis block:%s", chain, anchor.Hash.Hex())
+	}
+	require.NoError(t, ex.Drain())
 }
 
 func ChainAInit(t *testing.T,
