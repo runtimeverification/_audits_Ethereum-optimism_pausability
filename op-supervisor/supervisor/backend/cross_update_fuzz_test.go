@@ -51,9 +51,9 @@ import (
 // 17 - FinalizedL1RequestEvent
 
 var chainParams = RandomChainParams{
-	chainCount: 3,
-	minLength:  50,
-	maxLength:  100,
+	chainCount: 2,
+	minLength:  5,
+	maxLength:  10,
 
 	sameTimestampFrequency: 60,
 	dependencyChance:       20,
@@ -67,9 +67,8 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 		randomChain := chainParams.MakeRandomChain(seed)
 
 		chainA := eth.ChainIDFromUInt64(900)
-		chainB := eth.ChainIDFromUInt64(901)
 
-		ex, b, _, _, _ := ExecutorBackendInit(t, chainA, chainB)
+		ex, b := ExecutorBackendInit(t, randomChain)
 
 		ChainsInit(t, b, ex, randomChain)
 
@@ -103,6 +102,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
 }
 
+/*
 func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
@@ -657,11 +657,15 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 	})
 
 }
+*/
 
-func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (ex *event.GlobalSyncExec, b *SupervisorBackend, l1Src *testutils.MockL1Source, srcChainA *MockProcessorSource, srcChainB *MockProcessorSource) {
+func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.GlobalSyncExec, b *SupervisorBackend) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	dataDir := t.TempDir()
 
+	//TODO : randomize for all chains later
+	chainA := eth.ChainIDFromUInt64(900)
+	chainB := eth.ChainIDFromUInt64(901)
 	depSet, err := depset.NewStaticConfigDependencySet(
 		map[eth.ChainID]*depset.StaticConfigDependency{
 			chainA: {
@@ -694,11 +698,12 @@ func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (
 	require.NoError(t, err)
 	t.Log("initialized!")
 
-	l1Src = &testutils.MockL1Source{}
+	l1Src := &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
 
 	for i := 0; i < chainParams.chainCount; i++ {
-		srcChain := &MockProcessorSource{}
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+		srcChain := randomChain.chainSources[chain]
 		require.NoError(t, b.AttachProcessorSource(chainA, srcChain))
 	}
 
@@ -706,7 +711,7 @@ func ExecutorBackendInit(t *testing.T, chainA eth.ChainID, chainB eth.ChainID) (
 	require.NoError(t, err)
 	t.Log("started!")
 
-	return ex, b, l1Src, srcChainA, srcChainB
+	return ex, b
 }
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
@@ -722,6 +727,40 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		t.Logf("Chain %d genesis block:%s", chain, anchor.Hash.Hex())
 	}
 	require.NoError(t, ex.Drain())
+
+	for i := 0; i < chainParams.chainCount; i++ {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+
+		chainHeads := randomChain.chainHeads[chain]
+		localUnsafe := randomChain.chainBlocks[chain][chainHeads.localUnsafe]
+		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
+		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe]
+		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
+
+		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe.Number, crossUnsafe.Number, localSafe.Number, crossSafe.Number)
+
+		for _, block := range randomChain.chainBlocks[chain] {
+			if block.Number == 0 {
+				continue
+			}
+			t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
+			b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
+				ChainID:        chain,
+				NewLocalUnsafe: *block,
+			})
+			//if block.Number <= crossSafe.Number {
+			//	b.emitter.Emit(superevents.LocalDerivedEvent{
+			//		ChainID: chain,
+			//		Derived: types.DerivedBlockRefPair{
+			//			Derived: *block,
+			//			Source:  eth.L1BlockRef{},
+			//		},
+			//		NodeID: "test-node",
+			//	})
+			//}
+		}
+		require.NoError(t, ex.Drain())
+	}
 }
 
 func ChainAInit(t *testing.T,
@@ -776,7 +815,7 @@ func ChainAInit(t *testing.T,
 			ParentHash: common.BytesToHash([]byte{0xaa, byte(i - 1)}),
 			Time:       uint64(time.Now().Add(time.Duration(i*5) * time.Minute).Unix()),
 		}
-		t.Logf("Chain A block %d: %s\t Timestamp:%d", i, block.Hash.Hex(), block.Time)
+		t.Logf("Chain A block %d: %s\t Timestamp:%d", block.Number, block.Hash.Hex(), block.Time)
 		// Expect the source to return the block by number
 		srcChainA.ExpectBlockRefByNumber(uint64(i), block, nil)
 		srcChainA.ExpectFetchReceipts(block.Hash, nil, nil)

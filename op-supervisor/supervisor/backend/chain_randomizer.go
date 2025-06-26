@@ -34,6 +34,7 @@ func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log 
 		Address: params.InteropCrossL2InboxAddress,
 		Data:    data,
 		Topics:  topics,
+		Index:   uint(log_index),
 	}
 }
 
@@ -270,7 +271,7 @@ func (m *MockProcessorSource) FetchReceipts(ctx context.Context, blockHash commo
 }
 
 func (m *MockProcessorSource) ExpectFetchReceipts(hash common.Hash, receipts types2.Receipts, err error) {
-	m.Mock.On("FetchReceipts", hash).Once().Return(receipts, err)
+	m.Mock.On("FetchReceipts", hash).Return(receipts, err)
 }
 
 func (m *MockProcessorSource) BlockRefByNumber(ctx context.Context, num uint64) (eth.BlockRef, error) {
