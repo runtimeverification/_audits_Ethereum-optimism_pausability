@@ -25,7 +25,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/config"
 	"github.com/ethereum-optimism/optimism/op-supervisor/metrics"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/processors"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/superevents"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/syncnode"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
@@ -282,30 +281,6 @@ func (m *MockMetrics) RecordDBSearchEntriesRead(chainID eth.ChainID, count int64
 
 func (m *MockMetrics) RecordAccessListVerifyFailure(chainID eth.ChainID) {
 	m.Mock.Called(chainID)
-}
-
-type MockProcessorSource struct {
-	mock.Mock
-}
-
-var _ processors.Source = (*MockProcessorSource)(nil)
-
-func (m *MockProcessorSource) FetchReceipts(ctx context.Context, blockHash common.Hash) (types2.Receipts, error) {
-	out := m.Mock.Called(blockHash)
-	return out.Get(0).(types2.Receipts), out.Error(1)
-}
-
-func (m *MockProcessorSource) ExpectFetchReceipts(hash common.Hash, receipts types2.Receipts, err error) {
-	m.Mock.On("FetchReceipts", hash).Once().Return(receipts, err)
-}
-
-func (m *MockProcessorSource) BlockRefByNumber(ctx context.Context, num uint64) (eth.BlockRef, error) {
-	out := m.Mock.Called(num)
-	return out.Get(0).(eth.BlockRef), out.Error(1)
-}
-
-func (m *MockProcessorSource) ExpectBlockRefByNumber(num uint64, ref eth.BlockRef, err error) {
-	m.Mock.On("BlockRefByNumber", num).Return(ref, err)
 }
 
 // fakeSyncSource implements syncnode.SyncSource for testing asyncVerifyAccessWithRPC.
