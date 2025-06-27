@@ -5,13 +5,17 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/cross"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/processors"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
@@ -257,6 +261,53 @@ func FuzzRandomChains(f *testing.F) {
 			}
 		}
 	})
+}
+
+func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
+	hazards := make([]*ChainBlock, 0)
+
+	// Compute hazard set for the candidate
+	hazardSet, err := cross.NewHazardSet(deps, logger, candidate.chain, types.BlockSealFromRef(*candidate.block))
+	require.NoError(t, err)
+
+	// Add the candidate itself to the list
+	hazards = append(hazards, candidate)
+
+	// Add every block in the hazard set to the list
+	for chainIndex, hazard := range hazardSet.Entries() {
+		chainID := eth.ChainIDFromUInt64(uint64(chainIndex))
+		block := res.chainBlocks[chainID][hazard.Number]
+		require.Equal(t, block.Number, hazard.Number)
+		require.Equal(t, block.Hash, hazard.Hash)
+		chainBlock := &ChainBlock{chainID, block}
+		hazards = append(hazards, chainBlock)
+	}
+
+	return hazards
+}
+
+func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) {
+	t.Logf("Inserting a cycle in candidate (%s, %2d)'s hazard set", candidate.chain, candidate.block.Number)
+
+	candidateHazards := listHazards(t, res, deps, logger, candidate)
+	cycleStart := candidateHazards[r.Intn(len(candidateHazards))]
+	t.Logf("Picked random hazard set element to start the cycle: (%s, %2d)", cycleStart.chain, cycleStart.block.Number)
+
+	// If the random element is equal to the candidate, no need to compute the hazards again
+	var subHazards []*ChainBlock
+	if cycleStart.chain == candidate.chain {
+		require.Equal(t, cycleStart.block.Number, candidate.block.Number)
+		subHazards = candidateHazards
+	} else {
+		subHazards = listHazards(t, res, deps, logger, cycleStart)
+	}
+
+	cycleEnd := subHazards[r.Intn(len(subHazards))]
+	t.Logf("Picked random hazard set element to end the cycle: (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number)
+
+	res.dependencies[*cycleEnd] = append(res.dependencies[*cycleEnd], cycleStart)
+	// TODO: Create executing message
+	t.Logf("Added cyclic dependency: (%s, %2d) -> (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number, cycleStart.chain, cycleStart.block.Number)
 }
 
 type MockProcessorSource struct {
