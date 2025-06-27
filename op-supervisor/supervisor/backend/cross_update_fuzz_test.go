@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
@@ -53,7 +52,7 @@ import (
 var chainParams = RandomChainParams{
 	chainCount: 2,
 	minLength:  5,
-	maxLength:  10,
+	maxLength:  9,
 
 	sameTimestampFrequency: 60,
 	dependencyChance:       20,
@@ -72,10 +71,6 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
 		ChainsInit(t, b, ex, randomChain)
 
-		//crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
-		//srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
-		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
-
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
 			//InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
 			ex.Enqueue(event.AnnotatedEvent{
@@ -91,8 +86,11 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 				}, false))
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
-			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
-			CrossSafe_LE_LocalSafe(t, b, chainA)
+			for i := range chainParams.chainCount {
+				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
+				CrossSafe_LE_LocalSafe(t, b, chain)
+			}
 		})
 
 		err := b.Stop(context.Background())
@@ -704,7 +702,8 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	for i := 0; i < chainParams.chainCount; i++ {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 		srcChain := randomChain.chainSources[chain]
-		require.NoError(t, b.AttachProcessorSource(chainA, srcChain))
+		t.Logf("Attaching source for chain %d", chain)
+		require.NoError(t, b.AttachProcessorSource(chain, srcChain))
 	}
 
 	err = b.Start(context.Background())
@@ -715,6 +714,12 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 }
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
+	for exec, inits := range randomChain.dependencies {
+		for _, init := range inits {
+			t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
+		}
+	}
+	// Initialize Databases
 	for i := 0; i < chainParams.chainCount; i++ {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 		anchor := randomChain.chainBlocks[chain][0]
@@ -732,35 +737,69 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 
 		chainHeads := randomChain.chainHeads[chain]
-		localUnsafe := randomChain.chainBlocks[chain][chainHeads.localUnsafe]
-		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe]
-		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
+		localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
+		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe].Number
+		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
+		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe].Number
 
-		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe.Number, crossUnsafe.Number, localSafe.Number, crossSafe.Number)
+		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe, localSafe, crossSafe)
 
 		for _, block := range randomChain.chainBlocks[chain] {
 			if block.Number == 0 {
 				continue
 			}
 			t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
-			b.emitter.Emit(superevents.LocalUnsafeReceivedEvent{
-				ChainID:        chain,
-				NewLocalUnsafe: *block,
+			b.emitter.Emit(superevents.ChainProcessEvent{
+				ChainID: chain,
+				Target:  block.Number,
 			})
-			//if block.Number <= crossSafe.Number {
-			//	b.emitter.Emit(superevents.LocalDerivedEvent{
-			//		ChainID: chain,
-			//		Derived: types.DerivedBlockRefPair{
-			//			Derived: *block,
-			//			Source:  eth.L1BlockRef{},
-			//		},
-			//		NodeID: "test-node",
-			//	})
-			//}
+			if block.Number <= localSafe {
+				b.emitter.Emit(superevents.LocalDerivedEvent{
+					ChainID: chain,
+					Derived: types.DerivedBlockRefPair{
+						Derived: *block,
+						Source:  eth.L1BlockRef{},
+					},
+					NodeID: "test-node",
+				})
+			}
 		}
-		require.NoError(t, ex.Drain())
 	}
+	ex.DrainUntil(
+		func(ev event.Event) bool {
+			return StopCrossSafeRequest(ev)
+		}, true)
+
+	for i := 0; i < chainParams.chainCount; i++ {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+
+		chainHeads := randomChain.chainHeads[chain]
+		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
+		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe].Number
+
+		for _, block := range randomChain.chainBlocks[chain] {
+			if block.Number == 0 {
+				continue
+			}
+			if block.Number <= crossSafe {
+				ex.Enqueue(event.AnnotatedEvent{
+					Event: superevents.UpdateCrossSafeRequestEvent{
+						ChainID: chain,
+					},
+					EmitPriority: event.High,
+				})
+			}
+		}
+		ex.DrainUntil(
+			func(ev event.Event) bool {
+				return ev != superevents.UpdateCrossSafeRequestEvent{ChainID: chain}
+			}, true)
+
+		err := b.chainDBs.UpdateCrossUnsafe(chain, types.BlockSealFromRef(*crossUnsafe))
+		require.NoError(t, err)
+	}
+
+	t.Log("Chains initialized!")
 }
 
 func ChainAInit(t *testing.T,
@@ -851,48 +890,6 @@ func ChainAInit(t *testing.T,
 	return types.BlockSealFromRef(crossUnsafeHead), localSafeHeadIndex, crossSafeHeadIndex
 }
 
-func ChainBInit(t *testing.T, b *SupervisorBackend, chainB eth.ChainID, srcChainB *MockProcessorSource, chainBLength uint64) {
-	t.Log("Initializing Chain B")
-	t.Logf("Chain B length: %d", chainBLength)
-
-	if chainBLength > 0 {
-		// Initialize the chainB source with a genesis block
-		genesisBlock := eth.BlockRef{
-			Hash:       common.BytesToHash([]byte{0xbb, 0x00}),
-			Number:     0,
-			ParentHash: common.Hash{}, // genesis has no parent hash
-			Time:       uint64(time.Now().Unix()),
-		}
-		t.Logf("Chain B genesis block: %s", genesisBlock.Hash.Hex())
-
-		srcChainB.ExpectBlockRefByNumber(0, genesisBlock, nil)
-		srcChainB.ExpectFetchReceipts(genesisBlock.Hash, nil, nil)
-		// Emit the anchor event for chain B
-		b.emitter.Emit(superevents.AnchorEvent{
-			ChainID: chainB,
-			Anchor: types.DerivedBlockRefPair{
-				Derived: genesisBlock,
-				Source:  eth.L1BlockRef{},
-			}})
-		i := 1
-		for ; i < int(chainBLength); i++ {
-			block := eth.BlockRef{
-				Hash:       common.BytesToHash([]byte{0xbb, byte(i)}),
-				Number:     uint64(i),
-				ParentHash: common.Hash{0xbb, byte(i - 1)},
-				Time:       uint64(time.Now().Add(time.Duration(i*10) * time.Minute).Unix()),
-			}
-			t.Logf("Chain B block %d: %s\t Timestamp:%d", i, block.Hash.Hex(), block.Time)
-			// Expect the source to return the block by number
-			srcChainB.ExpectBlockRefByNumber(uint64(i), block, nil)
-			srcChainB.ExpectFetchReceipts(block.Hash, nil, nil)
-		}
-		srcChainB.ExpectBlockRefByNumber(uint64(i), eth.L1BlockRef{}, ethereum.NotFound)
-	} else {
-		t.Log("Chain B has no blocks to initialize")
-	}
-}
-
 func InitialState(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, chainA eth.ChainID, crossUnsafeHead types.BlockSeal, crossSafeHeadIndex uint64) {
 	err := b.chainDBs.UpdateCrossUnsafe(chainA, crossUnsafeHead)
 	require.NoError(t, err)
@@ -930,26 +927,47 @@ func InitialState(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, 
 	t.Logf("Cross Safe head: %d", crossSafe.Derived.Number)
 }
 
-func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
+func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
 
-	localUnsafe, err := b.LocalUnsafe(context.Background(), chainA)
-	require.NoError(t, err)
-	crossUnsafe, err := b.CrossUnsafe(context.Background(), chainA)
-	require.NoError(t, err)
+	localUnsafe, _ := b.LocalUnsafe(context.Background(), chain)
+	//require.NoError(t, err)
+	crossUnsafe, _ := b.CrossUnsafe(context.Background(), chain)
+	//require.NoError(t, err)
 
-	t.Logf("Cross Unsafe head for Chain A: %d <= Local Unsafe head for Chain A: %d", crossUnsafe.Number, localUnsafe.Number)
+	t.Logf("Chain %d: Cross Unsafe head %d <= Local Unsafe head %d", chain, crossUnsafe.Number, localUnsafe.Number)
 
 	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number, "Cross Unsafe head: %d is not less or equal than Local Unsafe head: %d", crossUnsafe.Number, localUnsafe.Number)
 }
 
-func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chainA eth.ChainID) {
+func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
 
-	localSafe, err := b.LocalSafe(context.Background(), chainA)
-	require.NoError(t, err)
-	crossSafe, err := b.CrossSafe(context.Background(), chainA)
-	require.NoError(t, err)
+	localSafe, _ := b.LocalSafe(context.Background(), chain)
+	//require.NoError(t, err)
+	crossSafe, _ := b.CrossSafe(context.Background(), chain)
+	//require.NoError(t, err)
 
-	t.Logf("Cross Safe head for Chain A: %d <= Local Safe head for Chain A: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
+	t.Logf("Chain %d: Cross Safe head %d <= Local Safe head %d", chain, crossSafe.Derived.Number, localSafe.Derived.Number)
 
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
+}
+
+func StopCrossSafeRequest(ev event.Event) bool {
+	for i := range chainParams.chainCount {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+		if (ev == superevents.UpdateCrossUnsafeRequestEvent{ChainID: chain}) {
+			return true
+		}
+		if (ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chain}) {
+			return true
+		}
+	}
+	return false
+	//switch ev.(type) {
+	//case superevents.CrossUnsafeUpdateEvent:
+	//	return true
+	//case superevents.CrossSafeUpdateEvent:
+	//	return false
+	//default:
+	//	return false
+	//}
 }

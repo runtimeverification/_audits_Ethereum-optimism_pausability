@@ -176,7 +176,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		chainLength := len(blocks)
 		lastBlockNumber := int(blocks[chainLength-1].Number)
 		heads.localSafe = uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
-		heads.localUnsafe = uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
+		heads.localUnsafe = uint64(len(res.chainBlocks[chain]) - 1) //uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
 
 		heads.crossSafe = uint64(r.Intn(int(cutoff + 1)))
 		heads.crossUnsafe = uint64(r.Intn(int(cutoff + 1)))
@@ -197,9 +197,9 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			execChain, execBlock := execcb.chain, execcb.block
 			initiatingLog := testutils.RandomLog(r)
 			initiatingLog.Index = uint(len(generatedLogs[initIndex]))
+			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
 			execLog := ExecMsgForLog(execChain, *execBlock, uint32(len(generatedLogs[execIndex])), initiatingLog)
 			execLog.Index = uint(len(generatedLogs[execIndex]))
-			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
 			generatedLogs[execIndex] = append(generatedLogs[execIndex], execLog)
 			res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 		}
