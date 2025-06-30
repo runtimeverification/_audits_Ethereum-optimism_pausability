@@ -66,7 +66,12 @@ type RandomChainParams struct {
 }
 
 type RandomChain struct {
-	cutoff       int
+	cutoffs struct {
+		crossUnsafe int
+		crossSafe   int
+		localUnsafe int
+		localSafe   int
+	}
 	chainIDs     []eth.ChainID
 	allBlocks    []*ChainBlock
 	dependencies map[ChainBlock][]*ChainBlock
@@ -85,8 +90,20 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	r := rand.New(rand.NewSource(seed))
 	totalLength := r.Intn(p.maxLength-p.minLength) + p.minLength
 
+	localUnsafe := r.Intn(totalLength-1) + 1
+	localSafe := r.Intn(totalLength-1) + 1
 	res = RandomChain{
-		cutoff:       r.Intn(totalLength),
+		cutoffs: struct {
+			crossUnsafe int
+			crossSafe   int
+			localUnsafe int
+			localSafe   int
+		}{
+			crossUnsafe: r.Intn(min(localUnsafe, localSafe)),
+			crossSafe:   r.Intn(min(localUnsafe, localSafe)),
+			localUnsafe: localUnsafe,
+			localSafe:   localSafe,
+		},
 		chainIDs:     make([]eth.ChainID, 0, p.chainCount),
 		allBlocks:    make([]*ChainBlock, 0, totalLength),
 		dependencies: make(map[ChainBlock][]*ChainBlock),
@@ -143,7 +160,6 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 
 	nextChain := 0
 	var prevBlock *eth.BlockRef
-	chainCutoffs := make(map[eth.ChainID]uint64)
 	for i, cb := range res.allBlocks {
 		block := cb.block
 		if i == 0 || prevBlock.Time != block.Time {
@@ -164,26 +180,23 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			block.ParentHash = lastblock.Hash
 		}
 
-		if i <= res.cutoff {
-			chainCutoffs[chainid] = block.Number
+		// Assign the cross/local heads based on where the cutoffs are
+		if i <= res.cutoffs.localSafe {
+			res.chainHeads[chainid].localSafe = block.Number
+		}
+		if i <= res.cutoffs.localUnsafe {
+			res.chainHeads[chainid].localUnsafe = block.Number
+		}
+		if i <= res.cutoffs.crossSafe {
+			res.chainHeads[chainid].crossSafe = block.Number
+		}
+		if i <= res.cutoffs.crossUnsafe {
+			res.chainHeads[chainid].crossUnsafe = block.Number
 		}
 
 		res.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
 		res.chainBlocks[chainid] = append(res.chainBlocks[chainid], block)
 		prevBlock = block
-	}
-
-	// Determine the local safe/unsafe heads for each chain
-	for chain, blocks := range res.chainBlocks {
-		cutoff := int(chainCutoffs[chain])
-		heads := res.chainHeads[chain]
-		chainLength := len(blocks)
-		lastBlockNumber := int(blocks[chainLength-1].Number)
-		heads.localSafe = uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
-		heads.localUnsafe = uint64(len(res.chainBlocks[chain]) - 1) //uint64(cutoff + r.Intn(lastBlockNumber-cutoff+1))
-
-		heads.crossSafe = uint64(r.Intn(int(cutoff + 1)))
-		heads.crossUnsafe = uint64(r.Intn(int(cutoff + 1)))
 	}
 
 	//
@@ -238,7 +251,7 @@ func FuzzRandomChains(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := params.MakeRandomChain(seed)
 
-		for i, cb := range randomChain.allBlocks {
+		for _, cb := range randomChain.allBlocks {
 			head := ""
 			if cb.block.Number == randomChain.chainHeads[cb.chain].crossSafe {
 				head += " <-- Cross Safe"
@@ -253,9 +266,6 @@ func FuzzRandomChains(f *testing.F) {
 				head += " <-- Local Unsafe"
 			}
 			t.Logf("    %s, %2d, %d, %s", cb.chain, cb.block.Number, cb.block.Time, head)
-			if i == randomChain.cutoff {
-				t.Log("    --- Cutoff point ---")
-			}
 		}
 
 		for exec, inits := range randomChain.dependencies {
