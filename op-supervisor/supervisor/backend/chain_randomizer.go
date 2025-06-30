@@ -99,8 +99,8 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			localUnsafe int
 			localSafe   int
 		}{
-			crossUnsafe: r.Intn(min(localUnsafe, localSafe)),
-			crossSafe:   r.Intn(min(localUnsafe, localSafe)),
+			crossUnsafe: r.Intn(localUnsafe),
+			crossSafe:   r.Intn(localSafe),
 			localUnsafe: localUnsafe,
 			localSafe:   localSafe,
 		},
