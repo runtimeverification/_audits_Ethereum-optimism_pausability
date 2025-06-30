@@ -65,6 +65,11 @@ type RandomChainParams struct {
 	dependencyChance       int // Percentage [0-100]
 }
 
+type L1Assignments struct {
+	L1Block  eth.BlockRef
+	L2Blocks []*ChainBlock
+}
+
 type RandomChain struct {
 	cutoffs struct {
 		crossUnsafe int
@@ -78,6 +83,7 @@ type RandomChain struct {
 	chainSources map[eth.ChainID]*MockProcessorSource
 	chainBlocks  map[eth.ChainID][]*eth.BlockRef
 	chainHeads   map[eth.ChainID]*ChainHeads
+	l1Blocks     []L1Assignments
 }
 
 func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, heads ChainHeads) {
@@ -110,6 +116,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		chainSources: make(map[eth.ChainID]*MockProcessorSource),
 		chainBlocks:  make(map[eth.ChainID][]*eth.BlockRef),
 		chainHeads:   make(map[eth.ChainID]*ChainHeads),
+		l1Blocks:     make([]L1Assignments, 0),
 	}
 
 	for i := range p.chainCount {
@@ -232,6 +239,23 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		}
 		source := res.chainSources[chain]
 		source.ExpectFetchReceipts(block.Hash, types2.Receipts{&rcpt}, nil)
+	}
+
+	//
+	// Make L1 derivation info
+	//
+	taken := 0
+	nextL1 := testutils.RandomBlockRef(r)
+	for taken < totalLength {
+		nextL1 = testutils.NextRandomRef(r, nextL1)
+		take := r.Intn(4) + 1 // Take 1-4 L2 blocks
+		take = min(totalLength-taken, take)
+		l1Derivation := L1Assignments{
+			L1Block:  nextL1,
+			L2Blocks: res.allBlocks[taken : taken+take],
+		}
+		res.l1Blocks = append(res.l1Blocks, l1Derivation)
+		taken += take
 	}
 
 	return res
