@@ -266,22 +266,33 @@ func GenerateReceiptsFromLogs(res *RandomChain) {
 
 func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
 	hazards := make([]*ChainBlock, 0)
+	includedHazards := make(map[eth.ChainID]*ChainBlock)
 
-	// Compute hazard set for the candidate
-	hazardSet, err := cross.NewHazardSet(deps, logger, candidate.chain, types.BlockSealFromRef(*candidate.block))
-	require.NoError(t, err)
+	// Add the candidate itself as a hazard
+	stack := []*ChainBlock{candidate}
 
-	// Add the candidate itself to the list
-	hazards = append(hazards, candidate)
+	for len(stack) > 0 {
+		// Pop hazard from the stack
+		hazard := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
 
-	// Add every block in the hazard set to the list
-	for chainIndex, hazard := range hazardSet.Entries() {
-		chainID := eth.ChainIDFromUInt64(uint64(chainIndex))
-		block := res.chainBlocks[chainID][hazard.Number]
-		require.Equal(t, block.Number, hazard.Number)
-		require.Equal(t, block.Hash, hazard.Hash)
-		chainBlock := &ChainBlock{chainID, block}
-		hazards = append(hazards, chainBlock)
+		// Check if we already found a hazard from this chain
+		includedHazard, ok := includedHazards[hazard.chain]
+		if ok {
+			// Ensure that there are not two different hazards from the same chain
+			require.Equal(t, includedHazard.block.ID(), hazard.block.ID())
+		} else {
+			// If not already included, add hazard to the list
+			hazards = append(hazards, hazard)
+			includedHazards[hazard.chain] = hazard
+
+			// For each new hazard, add all dependencies with the same timestamp to the stack
+			for _, dependency := range res.dependencies[*hazard] {
+				if dependency.block.Time == candidate.block.Time {
+					stack = append(stack, dependency)
+				}
+			}
+		}
 	}
 
 	return hazards
