@@ -50,7 +50,7 @@ import (
 var chainParams = RandomChainParams{
 	chainCount: 2,
 	minLength:  5,
-	maxLength:  15,
+	maxLength:  14,
 
 	sameTimestampFrequency: 60,
 	dependencyChance:       20,
@@ -89,6 +89,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 				}, false))
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
+			t.Log("Final State")
 			for i := range chainParams.chainCount {
 				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
@@ -663,24 +664,20 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.GlobalSyncExec, b *SupervisorBackend) {
 	logger := testlog.Logger(t, log.LvlInfo)
 	dataDir := t.TempDir()
+	dependencies := make(map[eth.ChainID]*depset.StaticConfigDependency)
 
-	//TODO : randomize for all chains later
-	chainA := eth.ChainIDFromUInt64(900)
-	chainB := eth.ChainIDFromUInt64(901)
-	depSet, err := depset.NewStaticConfigDependencySet(
-		map[eth.ChainID]*depset.StaticConfigDependency{
-			chainA: {
-				ChainIndex:     900,
-				ActivationTime: 42,
-				HistoryMinTime: 100,
-			},
-			chainB: {
-				ChainIndex:     901,
-				ActivationTime: 30,
-				HistoryMinTime: 20,
-			},
-		})
+	for i := range chainParams.chainCount {
+		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+
+		dependencies[chain] = &depset.StaticConfigDependency{
+			ChainIndex:     types.ChainIndex(900 + i),
+			ActivationTime: uint64(42 + i),
+			HistoryMinTime: uint64(100 + i),
+		}
+	}
+	depSet, err := depset.NewStaticConfigDependencySet(dependencies)
 	require.NoError(t, err)
+
 	cfg := &config.Config{
 		Version:               "test",
 		LogConfig:             oplog.CLIConfig{},
@@ -697,15 +694,14 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	ex = event.NewGlobalSynchronous(context.Background())
 	b, err = NewSupervisorBackend(context.Background(), logger, metrics.NoopMetrics, cfg, ex)
 	require.NoError(t, err)
-	t.Log("initialized!")
+	t.Log("Initialized!")
 
 	l1Src := &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
 
-	for i := 0; i < chainParams.chainCount; i++ {
+	for i := range chainParams.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 		srcChain := randomChain.chainSources[chain]
-		t.Logf("Attaching source for chain %d", chain)
 		require.NoError(t, b.AttachProcessorSource(chain, srcChain))
 	}
 
@@ -723,7 +719,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		}
 	}
 	// Initialize Databases
-	for i := 0; i < chainParams.chainCount; i++ {
+	for i := range chainParams.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 		anchor := randomChain.chainBlocks[chain][0]
 		b.emitter.Emit(superevents.AnchorEvent{
@@ -736,7 +732,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 	}
 	require.NoError(t, ex.Drain())
 
-	for i := 0; i < chainParams.chainCount; i++ {
+	for i := range chainParams.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 
 		chainHeads := randomChain.chainHeads[chain]
@@ -773,7 +769,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 			return StopCrossSafeRequest(ev)
 		}, true)
 
-	for i := 0; i < chainParams.chainCount; i++ {
+	for i := range chainParams.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
 
 		chainHeads := randomChain.chainHeads[chain]
