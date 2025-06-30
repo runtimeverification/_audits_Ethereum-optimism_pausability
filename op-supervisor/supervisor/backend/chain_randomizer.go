@@ -198,11 +198,14 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := r.Intn(totalLength-initIndex) + initIndex
 			execcb := res.allBlocks[execIndex]
-			execChain, execBlock := execcb.chain, execcb.block
+			execChain, _ := execcb.chain, execcb.block
+			if execChain == initcb.chain {
+				continue
+			}
 			initiatingLog := testutils.RandomLog(r)
 			initiatingLog.Index = uint(len(generatedLogs[initIndex]))
 			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
-			execLog := ExecMsgForLog(execChain, *execBlock, uint32(len(generatedLogs[execIndex])), initiatingLog)
+			execLog := ExecMsgForLog(initcb.chain, *block, uint32(len(generatedLogs[execIndex])), initiatingLog)
 			execLog.Index = uint(len(generatedLogs[execIndex]))
 			generatedLogs[execIndex] = append(generatedLogs[execIndex], execLog)
 			res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
