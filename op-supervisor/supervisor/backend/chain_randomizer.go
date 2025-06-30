@@ -223,13 +223,8 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			if execChain == initcb.chain {
 				continue
 			}
-			initiatingLog := testutils.RandomLog(r)
-			initiatingLog.Index = uint(len(res.generatedLogs[*initcb]))
-			res.generatedLogs[*initcb] = append(res.generatedLogs[*initcb], initiatingLog)
-			execLog := ExecMsgForLog(initcb.chain, *block, uint32(len(res.generatedLogs[*execcb])), initiatingLog)
-			execLog.Index = uint(len(res.generatedLogs[*execcb]))
-			res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
-			res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
+			initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
+			addExecutingMessage(&res, execcb, initcb, initiatingLog)
 		}
 	}
 
@@ -251,6 +246,20 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	}
 
 	return res
+}
+
+func addRandomInitiatingMessage(r *rand.Rand, res *RandomChain, initcb *ChainBlock) *types2.Log {
+	initiatingLog := testutils.RandomLog(r)
+	initiatingLog.Index = uint(len(res.generatedLogs[*initcb]))
+	res.generatedLogs[*initcb] = append(res.generatedLogs[*initcb], initiatingLog)
+	return initiatingLog
+}
+
+func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
+	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(len(res.generatedLogs[*execcb])), initiatingLog)
+	execLog.Index = uint(len(res.generatedLogs[*execcb]))
+	res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
+	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 }
 
 func GenerateReceiptsFromLogs(res *RandomChain) {
@@ -319,9 +328,7 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, deps cross.Hazard
 
 	// Add executing message from cycleEnd to the first log of cycleStart
 	initiatingLog := res.generatedLogs[*cycleStart][0]
-	execLog := ExecMsgForLog(cycleStart.chain, *cycleStart.block, uint32(len(res.generatedLogs[*cycleEnd])), initiatingLog)
-	res.generatedLogs[*cycleEnd] = append(res.generatedLogs[*cycleEnd], execLog)
-	res.dependencies[*cycleEnd] = append(res.dependencies[*cycleEnd], cycleStart)
+	addExecutingMessage(res, cycleEnd, cycleStart, initiatingLog)
 	t.Logf("Added cyclic dependency: (%s, %2d) -> (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number, cycleStart.chain, cycleStart.block.Number)
 }
 
