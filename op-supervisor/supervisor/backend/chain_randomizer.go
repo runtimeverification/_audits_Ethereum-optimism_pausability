@@ -237,45 +237,6 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	return res
 }
 
-func FuzzRandomChains(f *testing.F) {
-	params := RandomChainParams{
-		chainCount: 4,
-		minLength:  50,
-		maxLength:  100,
-
-		sameTimestampFrequency: 60,
-		dependencyChance:       20,
-	}
-	f.Add(int64(30))
-
-	f.Fuzz(func(t *testing.T, seed int64) {
-		randomChain := params.MakeRandomChain(seed)
-
-		for _, cb := range randomChain.allBlocks {
-			head := ""
-			if cb.block.Number == randomChain.chainHeads[cb.chain].crossSafe {
-				head += " <-- Cross Safe"
-			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].crossUnsafe {
-				head += " <-- Cross Unsafe"
-			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].localSafe {
-				head += " <-- Local Safe"
-			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].localUnsafe {
-				head += " <-- Local Unsafe"
-			}
-			t.Logf("    %s, %2d, %d, %s", cb.chain, cb.block.Number, cb.block.Time, head)
-		}
-
-		for exec, inits := range randomChain.dependencies {
-			for _, init := range inits {
-				t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
-			}
-		}
-	})
-}
-
 func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
 	hazards := make([]*ChainBlock, 0)
 
