@@ -77,13 +77,14 @@ type RandomChain struct {
 		localUnsafe int
 		localSafe   int
 	}
-	chainIDs     []eth.ChainID
-	allBlocks    []*ChainBlock
-	dependencies map[ChainBlock][]*ChainBlock
-	chainSources map[eth.ChainID]*MockProcessorSource
-	chainBlocks  map[eth.ChainID][]*eth.BlockRef
-	chainHeads   map[eth.ChainID]*ChainHeads
-	l1Blocks     []L1Assignments
+	chainIDs      []eth.ChainID
+	allBlocks     []*ChainBlock
+	generatedLogs map[ChainBlock][]*types2.Log
+	dependencies  map[ChainBlock][]*ChainBlock
+	chainSources  map[eth.ChainID]*MockProcessorSource
+	chainBlocks   map[eth.ChainID][]*eth.BlockRef
+	chainHeads    map[eth.ChainID]*ChainHeads
+	l1Blocks      []L1Assignments
 }
 
 func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, heads ChainHeads) {
@@ -110,13 +111,14 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			localUnsafe: localUnsafe,
 			localSafe:   localSafe,
 		},
-		chainIDs:     make([]eth.ChainID, 0, p.chainCount),
-		allBlocks:    make([]*ChainBlock, 0, totalLength),
-		dependencies: make(map[ChainBlock][]*ChainBlock),
-		chainSources: make(map[eth.ChainID]*MockProcessorSource),
-		chainBlocks:  make(map[eth.ChainID][]*eth.BlockRef),
-		chainHeads:   make(map[eth.ChainID]*ChainHeads),
-		l1Blocks:     make([]L1Assignments, 0),
+		chainIDs:      make([]eth.ChainID, 0, p.chainCount),
+		allBlocks:     make([]*ChainBlock, 0, totalLength),
+		generatedLogs: make(map[ChainBlock][]*types2.Log),
+		dependencies:  make(map[ChainBlock][]*ChainBlock),
+		chainSources:  make(map[eth.ChainID]*MockProcessorSource),
+		chainBlocks:   make(map[eth.ChainID][]*eth.BlockRef),
+		chainHeads:    make(map[eth.ChainID]*ChainHeads),
+		l1Blocks:      make([]L1Assignments, 0),
 	}
 
 	for i := range p.chainCount {
@@ -209,7 +211,6 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	//
 	// Create random dependencies between all blocks
 	//
-	generatedLogs := make([][]*types2.Log, totalLength)
 	for initIndex, initcb := range res.allBlocks {
 		block := initcb.block
 		if block.Number == 0 {
@@ -223,22 +224,13 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 				continue
 			}
 			initiatingLog := testutils.RandomLog(r)
-			initiatingLog.Index = uint(len(generatedLogs[initIndex]))
-			generatedLogs[initIndex] = append(generatedLogs[initIndex], initiatingLog)
-			execLog := ExecMsgForLog(initcb.chain, *block, uint32(len(generatedLogs[execIndex])), initiatingLog)
-			execLog.Index = uint(len(generatedLogs[execIndex]))
-			generatedLogs[execIndex] = append(generatedLogs[execIndex], execLog)
+			initiatingLog.Index = uint(len(res.generatedLogs[*initcb]))
+			res.generatedLogs[*initcb] = append(res.generatedLogs[*initcb], initiatingLog)
+			execLog := ExecMsgForLog(initcb.chain, *block, uint32(len(res.generatedLogs[*execcb])), initiatingLog)
+			execLog.Index = uint(len(res.generatedLogs[*execcb]))
+			res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
 			res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 		}
-	}
-	for i, logs := range generatedLogs {
-		cb := res.allBlocks[i]
-		chain, block := cb.chain, cb.block
-		rcpt := types2.Receipt{
-			Logs: logs,
-		}
-		source := res.chainSources[chain]
-		source.ExpectFetchReceipts(block.Hash, types2.Receipts{&rcpt}, nil)
 	}
 
 	//
@@ -259,6 +251,17 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	}
 
 	return res
+}
+
+func GenerateReceiptsFromLogs(res *RandomChain) {
+	for cb, logs := range res.generatedLogs {
+		chain, block := cb.chain, cb.block
+		rcpt := types2.Receipt{
+			Logs: logs,
+		}
+		source := res.chainSources[chain]
+		source.ExpectFetchReceipts(block.Hash, types2.Receipts{&rcpt}, nil)
+	}
 }
 
 func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
@@ -303,8 +306,11 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, deps cross.Hazard
 	cycleEnd := subHazards[r.Intn(len(subHazards))]
 	t.Logf("Picked random hazard set element to end the cycle: (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number)
 
+	// Add executing message from cycleEnd to the first log of cycleStart
+	initiatingLog := res.generatedLogs[*cycleStart][0]
+	execLog := ExecMsgForLog(cycleStart.chain, *cycleStart.block, uint32(len(res.generatedLogs[*cycleEnd])), initiatingLog)
+	res.generatedLogs[*cycleEnd] = append(res.generatedLogs[*cycleEnd], execLog)
 	res.dependencies[*cycleEnd] = append(res.dependencies[*cycleEnd], cycleStart)
-	// TODO: Create executing message
 	t.Logf("Added cyclic dependency: (%s, %2d) -> (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number, cycleStart.chain, cycleStart.block.Number)
 }
 
