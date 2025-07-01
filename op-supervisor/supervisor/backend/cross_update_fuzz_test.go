@@ -3,9 +3,11 @@ package backend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
@@ -111,13 +113,8 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
 			// Ensure the invariants hold in the intiial state
-			t.Log("Initial State:")
-			for i := range chainParams.chainCount {
-				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-				t.Logf("Chain %s", chain)
-				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
-				CrossSafe_LE_LocalSafe(t, b, chain)
-			}
+			t.Log("Initial State")
+			AssertInvariants(t, b)
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
 			ex.Enqueue(event.AnnotatedEvent{
@@ -132,13 +129,8 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 				}, false))
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
-			t.Log("Final State:")
-			for i := range chainParams.chainCount {
-				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-				t.Logf("Chain %s", chain)
-				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
-				CrossSafe_LE_LocalSafe(t, b, chain)
-			}
+			t.Log("Final State")
+			AssertInvariants(t, b)
 		})
 
 		err := b.Stop(context.Background())
@@ -159,13 +151,8 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 
 		t.Run("UpdateCrossSafeRequestEvent", func(t *testing.T) {
 			// Ensure the invariants hold in the intiial state
-			t.Log("Initial State:")
-			for i := range chainParams.chainCount {
-				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-				t.Logf("Chain %s", chain)
-				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
-				CrossSafe_LE_LocalSafe(t, b, chain)
-			}
+			t.Log("Initial State")
+			AssertInvariants(t, b)
 
 			ex.Enqueue(event.AnnotatedEvent{
 				Event:        superevents.UpdateCrossSafeRequestEvent{},
@@ -179,13 +166,8 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 
 			t.Log("UpdateCrossSafeRequestEvent processed")
 
-			t.Log("Final State:")
-			for i := range chainParams.chainCount {
-				chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-				t.Logf("Chain %s", chain)
-				CrossUnsafe_LE_LocalUnsafe(t, b, chain)
-				CrossSafe_LE_LocalSafe(t, b, chain)
-			}
+			t.Log("Final State")
+			AssertInvariants(t, b)
 		})
 
 		err := b.Stop(context.Background())
@@ -195,44 +177,35 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 
 }
 
-/*
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), bool(false)) // Add initial values for fuzzing
+	f.Add(int64(30), bool(false)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T,
-		chainALength uint64,
-		chainBLength uint64,
-		crossUnsafeHeadIndex uint64,
-		localSafeHeadIndex uint64,
-		crossSafeHeadIndex uint64,
-		equalUnsafeChain bool) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
-		chainA := eth.ChainIDFromUInt64(900)
-		chainB := eth.ChainIDFromUInt64(901)
+	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
 
-		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
-
-		chainALength = chainALength%10 + 1 // ChainA can't be empty
-		//chainBLength = chainBLength % 10
-
-		crossUnsafeHead, localSafeHeadIndex, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
-		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
-		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+		randomChain := chainParams.MakeRandomChain(seed)
+		ex, b := ExecutorBackendInit(t, randomChain)
+		ChainsInit(t, b, ex, randomChain)
 
 		t.Run("LocalSafeUpdateEvent Event", func(t *testing.T) {
-			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+			// Ensure the invariants hold in the initial state
+			t.Log("Initial State")
+			AssertInvariants(t, b)
+
+			chainA := randomChain.chainIDs[0]
+			localSafeHead := randomChain.chainHeads[chainA].localSafe
+
 			var hashDerived common.Hash
 			if equalUnsafeChain {
-				hashDerived = common.BytesToHash([]byte{0xaa, byte(localSafeHeadIndex + 1)})
+				hashDerived = common.BytesToHash([]byte{0xaa, byte(localSafeHead + 1)})
 			} else {
-				hashDerived = common.BytesToHash([]byte{0xbb, byte(localSafeHeadIndex + 1)}) // Ensure the hash is different from the cross unsafe head
+				hashDerived = common.BytesToHash([]byte{0xbb, byte(localSafeHead + 1)}) // Ensure the hash is different from the unsafe chain
 			}
 			newLocalSafe := types.DerivedBlockSealPair{
 				Derived: types.BlockSealFromRef(eth.BlockRef{
 					Hash:       hashDerived,
-					Number:     localSafeHeadIndex + 1,
-					ParentHash: common.BytesToHash([]byte{0xaa, byte(localSafeHeadIndex)}),
+					Number:     localSafeHead + 1,
+					ParentHash: common.BytesToHash([]byte{0xaa, byte(localSafeHead)}),
 					Time:       uint64(time.Now().Unix()),
 				}),
 				Source: types.BlockSeal{},
@@ -252,9 +225,10 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 						NewLocalSafe: newLocalSafe,
 					}
 				}, false))
+			t.Log("LocalSafeUpdateEvent processed")
 
-			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
-			CrossSafe_LE_LocalSafe(t, b, chainA)
+			t.Log("Final State")
+			AssertInvariants(t, b)
 		})
 
 		err := b.Stop(context.Background())
@@ -264,6 +238,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 }
 
+/*
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), uint64(3)) // Add initial values for fuzzing
@@ -868,15 +843,13 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
-func StopCrossSafeRequest(ev event.Event) bool {
+func AssertInvariants(t *testing.T, b *SupervisorBackend) {
 	for i := range chainParams.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-		if (ev == superevents.UpdateCrossUnsafeRequestEvent{ChainID: chain}) {
-			return true
-		}
-		if (ev == superevents.UpdateCrossSafeRequestEvent{ChainID: chain}) {
-			return true
-		}
+
+		t.Logf("Chain %d:", chain)
+
+		CrossUnsafe_LE_LocalUnsafe(t, b, chain)
+		CrossSafe_LE_LocalSafe(t, b, chain)
 	}
-	return false
 }
