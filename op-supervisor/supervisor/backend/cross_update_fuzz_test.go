@@ -238,43 +238,30 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 }
 
-/*
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
-	f.Add(uint64(5), uint64(2), uint64(3), uint64(2), uint64(1), uint64(3)) // Add initial values for fuzzing
+	f.Add(int64(30), uint64(5)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T,
-		chainALength uint64,
-		chainBLength uint64,
-		crossUnsafeHeadIndex uint64,
-		localSafeHeadIndex uint64,
-		crossSafeHeadIndex uint64,
-		localSafetoUpdate uint64) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
-		chainA := eth.ChainIDFromUInt64(900)
-		chainB := eth.ChainIDFromUInt64(901)
+	f.Fuzz(func(t *testing.T, seed int64, localSafetoUpdate uint64) {
 
-		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
-
-		chainALength = chainALength%10 + 1 // ChainA can't be empty
-		//chainBLength = chainBLength % 10
-
-		crossUnsafeHead, localSafeHeadIndex, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
-		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
-		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+		randomChain := chainParams.MakeRandomChain(seed)
+		ex, b := ExecutorBackendInit(t, randomChain)
+		ChainsInit(t, b, ex, randomChain)
 
 		t.Run("LocalDerivedEvent Event", func(t *testing.T) {
-			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
-			localSafetoUpdate = localSafetoUpdate % (localSafeHeadIndex + 3) // Allow it to be greater than the next current local safe head
+			// Ensure the invariants hold in the initial state
+			t.Log("Initial State")
+			AssertInvariants(t, b)
+
+			chainA := randomChain.chainIDs[0]
+			localSafeHead := randomChain.chainHeads[chainA].localSafe
+			localSafetoUpdate = localSafetoUpdate % (localSafeHead + 3) // Allow it to be greater than the next current local safe head
+
 			derived := types.DerivedBlockRefPair{
-				Derived: eth.BlockRef{
-					Hash:       common.BytesToHash([]byte{0xaa, byte(localSafetoUpdate)}),
-					Number:     localSafetoUpdate,
-					ParentHash: common.BytesToHash([]byte{0xaa, byte(localSafetoUpdate) - 1}),
-					Time:       uint64(time.Now().Unix()),
-				},
-				Source: eth.BlockRef{},
+				Derived: *randomChain.chainBlocks[chainA][localSafetoUpdate],
+				Source:  eth.BlockRef{},
 			}
+
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.LocalDerivedEvent{
 					ChainID: chainA,
@@ -292,9 +279,10 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 						NodeID:  "test-node",
 					}
 				}, false))
+			t.Log("LocalDerivedEvent processed")
 
-			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
-			CrossSafe_LE_LocalSafe(t, b, chainA)
+			t.Log("Final State")
+			AssertInvariants(t, b)
 		})
 
 		err := b.Stop(context.Background())
@@ -303,6 +291,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 	})
 }
 
+/*
 func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(4), uint64(3), uint64(1)) // Add initial values for fuzzing
