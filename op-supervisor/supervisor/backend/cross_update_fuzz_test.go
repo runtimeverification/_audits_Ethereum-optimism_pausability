@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
 	"testing"
 	"time"
 
@@ -240,7 +241,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
-	f.Add(int64(30), uint64(5)) // Add initial values for fuzzing
+	f.Add(int64(30), uint64(5))
 
 	f.Fuzz(func(t *testing.T, seed int64, localSafetoUpdate uint64) {
 
@@ -291,56 +292,44 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 	})
 }
 
-/*
 func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
-	f.Add(uint64(5), uint64(2), uint64(4), uint64(3), uint64(1)) // Add initial values for fuzzing
+	f.Add(int64(30))
 
-	f.Fuzz(func(t *testing.T,
-		chainALength uint64,
-		chainBLength uint64,
-		crossUnsafeHeadIndex uint64,
-		localSafeHeadIndex uint64,
-		crossSafeHeadIndex uint64) {
-		t.Logf("Fuzzing with Chain A length: %d, Chain B length: %d", chainALength, chainBLength)
-		chainA := eth.ChainIDFromUInt64(900)
-		chainB := eth.ChainIDFromUInt64(901)
+	f.Fuzz(func(t *testing.T, seed int64) {
 
-		ex, b, _, srcChainA, _ := ExecutorBackendInit(t, chainA, chainB)
-
-		chainALength = chainALength%10 + 1 // ChainA can't be empty
-		//chainBLength = chainBLength % 10
-
-		crossUnsafeHead, _, crossSafeHeadIndex := ChainAInit(t, b, ex, chainA, srcChainA, chainALength, crossUnsafeHeadIndex, localSafeHeadIndex, crossSafeHeadIndex)
-		srcChainA.ExpectBlockRefByNumber(uint64(chainALength), eth.L1BlockRef{}, ethereum.NotFound)
-		//ChainBInit(t, b, chainB, srcChainB, chainBLength)
+		randomChain := chainParams.MakeRandomChain(seed)
+		ex, b := ExecutorBackendInit(t, randomChain)
+		ChainsInit(t, b, ex, randomChain)
 
 		t.Run("ReplaceBlockEvent Event", func(t *testing.T) {
-			InitialState(t, b, ex, chainA, crossUnsafeHead, crossSafeHeadIndex)
+			// Ensure the invariants hold in the initial state
+			t.Log("Initial State")
+			AssertInvariants(t, b)
+
+			chainA := randomChain.chainIDs[0]
+			crossSafeHeadCandidate := randomChain.chainHeads[chainA].crossSafe + 1
 
 			invalidated := types.DerivedBlockRefPair{
-				Derived: eth.BlockRef{
-					Hash:       common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex) + 1}),
-					Number:     crossSafeHeadIndex + 1,
-					ParentHash: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex)}),
-					Time:       uint64(time.Now().Add(time.Duration((crossSafeHeadIndex+1)*5) * time.Minute).Unix()),
-				},
-				Source: eth.BlockRef{},
+				Derived: *randomChain.chainBlocks[chainA][crossSafeHeadCandidate],
+				Source:  eth.BlockRef{},
 			}
 			b.chainDBs.InvalidateLocalSafe(chainA, invalidated)
 
+			randomHash := make([]byte, 32)
+			rand.Read(randomHash)
 			replacementBlock := eth.BlockRef{
-				Hash:       common.BytesToHash([]byte{0xbb, byte(crossSafeHeadIndex) + 1}),
-				Number:     crossSafeHeadIndex + 1,
-				ParentHash: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex)}),
-				Time:       uint64(time.Now().Add(time.Duration((crossSafeHeadIndex+1)*10) * time.Minute).Unix()),
+				Hash:       common.BytesToHash(randomHash),
+				Number:     crossSafeHeadCandidate,
+				ParentHash: invalidated.Derived.ParentHash,
+				Time:       uint64(time.Now().Unix()),
 			}
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.ReplaceBlockEvent{
 					ChainID: chainA,
 					Replacement: types.BlockReplacement{
 						Replacement: replacementBlock,
-						Invalidated: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex + 1)}),
+						Invalidated: invalidated.Derived.Hash,
 					},
 				},
 				EmitPriority: event.High,
@@ -352,13 +341,15 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 						ChainID: chainA,
 						Replacement: types.BlockReplacement{
 							Replacement: replacementBlock,
-							Invalidated: common.BytesToHash([]byte{0xaa, byte(crossSafeHeadIndex + 1)}),
+							Invalidated: invalidated.Derived.Hash,
 						},
 					}
 				}, false))
 
-			CrossUnsafe_LE_LocalUnsafe(t, b, chainA)
-			CrossSafe_LE_LocalSafe(t, b, chainA)
+			t.Log("ReplaceBlockEvent processed")
+
+			t.Log("Final State")
+			AssertInvariants(t, b)
 		})
 
 		err := b.Stop(context.Background())
@@ -367,6 +358,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 	})
 }
 
+/*
 func FuzzEventsPreserveState(f *testing.F) {
 
 	f.Add(uint64(5), uint64(2), uint64(3), uint64(3), uint64(1)) // Add initial values for fuzzing
