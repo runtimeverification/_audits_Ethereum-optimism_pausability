@@ -95,9 +95,9 @@ func FuzzRandomChains(f *testing.F) {
 }
 
 var chainParams = RandomChainParams{
-	chainCount: 2,
+	chainCount: 3,
 	minLength:  10,
-	maxLength:  15,
+	maxLength:  30,
 
 	sameTimestampFrequency: 60,
 	dependencyChance:       20,
@@ -758,10 +758,10 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 
 func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
 
-	localUnsafe, _ := b.LocalUnsafe(context.Background(), chain)
-	//require.NoError(t, err)
-	crossUnsafe, _ := b.CrossUnsafe(context.Background(), chain)
-	//require.NoError(t, err)
+	localUnsafe, err := b.LocalUnsafe(context.Background(), chain)
+	require.NoError(t, err)
+	crossUnsafe, err := b.CrossUnsafe(context.Background(), chain)
+	require.NoError(t, err)
 
 	t.Logf("\t- Cross Unsafe head %d <= Local Unsafe head %d", crossUnsafe.Number, localUnsafe.Number)
 
@@ -770,10 +770,10 @@ func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.Ch
 
 func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
 
-	localSafe, _ := b.LocalSafe(context.Background(), chain)
-	//require.NoError(t, err)
-	crossSafe, _ := b.CrossSafe(context.Background(), chain)
-	//require.NoError(t, err)
+	localSafe, err := b.LocalSafe(context.Background(), chain)
+	require.NoError(t, err)
+	crossSafe, err := b.CrossSafe(context.Background(), chain)
+	require.NoError(t, err)
 
 	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 

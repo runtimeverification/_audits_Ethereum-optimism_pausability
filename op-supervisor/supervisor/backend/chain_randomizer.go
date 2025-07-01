@@ -221,10 +221,10 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := r.Intn(totalLength-initIndex) + initIndex
 			execcb := res.allBlocks[execIndex]
-			execChain, _ := execcb.chain, execcb.block
-			if execChain == initcb.chain {
-				continue
-			}
+			//_, execBlock := execcb.chain, execcb.block
+			//if execBlock == block {
+			//	continue
+			//}
 			initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
 			addExecutingMessage(&res, execcb, initcb, initiatingLog)
 		}
@@ -260,7 +260,7 @@ func addRandomInitiatingMessage(r *rand.Rand, res *RandomChain, initcb *ChainBlo
 }
 
 func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
-	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(len(res.generatedLogs[*execcb])), initiatingLog)
+	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(initiatingLog.Index), initiatingLog)
 	execLog.Index = uint(len(res.generatedLogs[*execcb]))
 	res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
 	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
