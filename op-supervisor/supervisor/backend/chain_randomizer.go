@@ -97,8 +97,10 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	r := rand.New(rand.NewSource(seed))
 	totalLength := r.Intn(p.maxLength-p.minLength) + p.minLength
 
-	localUnsafe := r.Intn(totalLength-1) + 1
+	localUnsafe := totalLength - 1
 	localSafe := r.Intn(totalLength-1) + 1
+	crossSafe := r.Intn(localSafe)
+	crossUnsafe := r.Intn(localUnsafe-crossSafe) + crossSafe
 	res = RandomChain{
 		cutoffs: struct {
 			crossUnsafe int
@@ -106,8 +108,8 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			localUnsafe int
 			localSafe   int
 		}{
-			crossUnsafe: r.Intn(localUnsafe),
-			crossSafe:   r.Intn(localSafe),
+			crossUnsafe: crossUnsafe,
+			crossSafe:   crossSafe,
 			localUnsafe: localUnsafe,
 			localSafe:   localSafe,
 		},
