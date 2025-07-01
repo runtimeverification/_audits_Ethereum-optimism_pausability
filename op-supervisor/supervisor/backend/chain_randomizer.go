@@ -245,6 +245,8 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		taken += take
 	}
 
+	GenerateReceiptsFromLogs(&res)
+
 	return res
 }
 
