@@ -265,8 +265,9 @@ func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBloc
 }
 
 func GenerateReceiptsFromLogs(res *RandomChain) {
-	for cb, logs := range res.generatedLogs {
+	for _, cb := range res.allBlocks {
 		chain, block := cb.chain, cb.block
+		logs := res.generatedLogs[*cb]
 		rcpt := types2.Receipt{
 			Logs: logs,
 		}
