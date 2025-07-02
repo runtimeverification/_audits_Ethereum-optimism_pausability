@@ -95,11 +95,18 @@ func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, h
 
 func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	r := rand.New(rand.NewSource(seed))
-	totalLength := randomInRange(r, p.minLength, p.maxLength)
 
-	localUnsafe := totalLength - 1
-	localSafe := randomInRange(r, 1, totalLength)
-	crossSafe := r.Intn(localSafe)
+	// Add two special blocks to be used when creating invalid dependencies
+	totalLength := randomInRange(r, p.minLength, p.maxLength) + 2
+	// First block has a timestamp far in the past, already expired (used in InsertDependencyToExpiredMessage)
+	expiredBlockIndex := 0
+	// Last block has a timestamp in the future (used in InsertFutureDependency)
+	futureBlockIndex := totalLength - 1
+
+	// Heads (and candidates) must be between the two special blocks
+	localUnsafe := futureBlockIndex - 1
+	localSafe := randomInRange(r, expiredBlockIndex+2, futureBlockIndex)
+	crossSafe := randomInRange(r, expiredBlockIndex+1, localSafe)
 	crossUnsafe := randomInRange(r, crossSafe, localUnsafe)
 	res = RandomChain{
 		randomGenerator: r,
@@ -141,13 +148,23 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	for i := range totalLength {
 		allBlocks := res.allBlocks
 		if i == 0 {
+			// First block has a timestamp far in the past, already expired (used in InsertDependencyToExpiredMessage)
 			randomBlock := testutils.RandomBlockRef(r)
-			randomBlock.Time = 10000
+			randomBlock.Time = 0
+			newBlock = &ChainBlock{chainUninit, &randomBlock}
+		} else if i == 1 {
+			// Set the initial timestamp so that the block at index 0 is already expired
+			randomBlock := testutils.NextRandomRef(r, *allBlocks[0].block)
+			randomBlock.Time = params.MessageExpiryTimeSecondsInterop + 1
 			newBlock = &ChainBlock{chainUninit, &randomBlock}
 		} else {
 			// Use NextRandomRef for timestamp coherence.
 			randomBlock := testutils.NextRandomRef(r, *allBlocks[len(allBlocks)-1].block)
-			if r.Intn(100) < p.sameTimestampFrequency && timeStampCount < p.chainCount {
+
+			// Repeat timestamps with some probability, with two caveats:
+			// - Can only have one block per chain with the same timestamp,
+			// - Last block must have a unique future timestamp, so it can be used in InsertFutureDependency.
+			if timeStampCount < p.chainCount && i < futureBlockIndex && r.Intn(100) < p.sameTimestampFrequency {
 				randomBlock.Time = allBlocks[len(allBlocks)-1].block.Time
 				timeStampCount++
 			} else {
@@ -215,13 +232,13 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	// Create random dependencies between all blocks
 	//
 	for initIndex, initcb := range res.allBlocks {
+		// Add an unimportant message at index 0 that can be modified later by the InsertCycle function
+		addRandomInitiatingMessage(r, &res, initcb)
+
 		block := initcb.block
 		if block.Number == 0 {
 			continue
 		}
-
-		// Add an unimportant message at index 0 that can be modified later by the InsertCycle function
-		addRandomInitiatingMessage(r, &res, initcb)
 
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := randomInRange(r, initIndex, totalLength)
@@ -339,13 +356,15 @@ func FindRandomChainIndex(res *RandomChain, candidate *ChainBlock) (index int) {
 func InsertFutureDependency(t *testing.T, r *rand.Rand, res *RandomChain, candidateIndex int) {
 	candidateBlock := res.allBlocks[candidateIndex]
 	t.Logf("Inserting a future dependency in candidate (%s, %2d)'s hazard set", candidateBlock.chain, candidateBlock.block.Number)
-	futureIndex := randomInRange(r, candidateIndex, len(res.allBlocks))
-	for i := futureIndex; i < len(res.allBlocks); i++ {
-		if res.allBlocks[i].block.Time > candidateBlock.block.Time {
-			futureIndex = i
-			continue
-		}
+
+	// Find the next block with a timestamp in the future (guaranteed to exist since we added a special block at the end)
+	i := candidateIndex + 1
+	for res.allBlocks[i].block.Time <= candidateBlock.block.Time {
+		i++
 	}
+
+	// Randomly pick a future block and create an executing message to it
+	futureIndex := randomInRange(r, i, len(res.allBlocks))
 	futureBlock := res.allBlocks[futureIndex]
 	initiatingLog := addRandomInitiatingMessage(r, res, futureBlock)
 	addExecutingMessage(res, candidateBlock, futureBlock, initiatingLog)
@@ -354,10 +373,11 @@ func InsertFutureDependency(t *testing.T, r *rand.Rand, res *RandomChain, candid
 func InsertDependencyToExpiredMessage(t *testing.T, r *rand.Rand, res *RandomChain, candidateIndex int) {
 	candidate := res.allBlocks[candidateIndex]
 
+	// We set the timestamps so that this is true for every block that can be selected as candidate
+	require.Less(t, params.MessageExpiryTimeSecondsInterop, candidate.block.Time)
+
 	// Any timestamp below this is expired
-	// TODO: Ensure there is always an expired block to avoid overflow
 	expiryTimestamp := candidate.block.Time - params.MessageExpiryTimeSecondsInterop
-	//require.Less(t, candidate.block.Time, math.MaxInt)
 
 	// Iterate until we find the first unexpired block
 	i := 0
@@ -365,7 +385,7 @@ func InsertDependencyToExpiredMessage(t *testing.T, r *rand.Rand, res *RandomCha
 		i++
 	}
 
-	// TODO: Ensure there is always an expired block
+	// i is at least 1 since the block at index 0 is guaranteed to be expired
 	expiredIndex := r.Intn(i)
 	expiredBlock := res.allBlocks[expiredIndex]
 	initiatingLog := addRandomInitiatingMessage(r, res, expiredBlock)
