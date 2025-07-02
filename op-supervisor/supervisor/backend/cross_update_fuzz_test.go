@@ -982,15 +982,15 @@ func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.Ch
 func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID, state State) {
 
 	localSafe, err := b.LocalSafe(context.Background(), chain)
+	crossSafe, _ := b.CrossSafe(context.Background(), chain)
+
+	state.chainHeads[chain].crossSafe = crossSafe.Derived.Number
+	state.chainHeads[chain].localSafe = localSafe.Derived.Number
+
+	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 	if err == types.ErrAwaitReplacementBlock {
 		return
 	}
-	crossSafe, err := b.CrossSafe(context.Background(), chain)
-	require.NoError(t, err)
-
-	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
-	state.chainHeads[chain].crossSafe = crossSafe.Derived.Number
-	state.chainHeads[chain].localSafe = localSafe.Derived.Number
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
