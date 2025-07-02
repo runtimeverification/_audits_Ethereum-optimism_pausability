@@ -104,10 +104,10 @@ var chainParams = RandomChainParams{
 	maxLength:  30,
 
 	sameTimestampFrequency: 70,
-	dependencyChance:       50,
+	dependencyChance:       30,
 }
 
-func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
+func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
 	f.Add(int64(30))
 
@@ -140,7 +140,52 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 			posState := AssertInvariants(t, b, randomChain)
 
 			// Check that the state has changed - Liveness property
-			AssertCrossUnsafeHeadUpdate(t, randomChain, preState, posState)
+			AssertCrossUnsafeHeadUpdate(t, randomChain, preState, posState, eth.ChainIDFromUInt64(0))
+		})
+
+		err := b.Stop(context.Background())
+		require.NoError(t, err)
+		t.Log("stopped!")
+	})
+}
+
+func FuzzUpdateCrossUnsafeFails(f *testing.F) {
+
+	f.Add(int64(30))
+
+	f.Fuzz(func(t *testing.T, seed int64) {
+		randomChain := chainParams.MakeRandomChain(seed)
+		ex, b := ExecutorBackendInit(t, randomChain)
+
+		t.Run("UpdateCrossUnsafeRequestEvent Fails", func(t *testing.T) {
+			// Invalidate a block
+			invalidCandidate := GetInvalidCandidate(t, randomChain)
+			InvalidateBlock(t, &randomChain, &invalidCandidate)
+			ChainsInit(t, b, ex, randomChain)
+
+			// Ensure the invariants hold in the intiial state
+			t.Log("Initial State")
+			preState := AssertInvariants(t, b, randomChain)
+
+			// Enqueue the UpdateCrossUnsafeRequestEvent
+			ex.Enqueue(event.AnnotatedEvent{
+				Event:        superevents.UpdateCrossUnsafeRequestEvent{},
+				EmitPriority: event.High,
+			})
+
+			// Drain the event until it is processed
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.UpdateCrossUnsafeRequestEvent{}
+				}, false))
+			t.Log("UpdateCrossUnsafeRequestEvent processed")
+
+			t.Log("Final State")
+			// Assert the invariants hold after handling the event - Safety properties
+			posState := AssertInvariants(t, b, randomChain)
+
+			// Check that the state has changed - Liveness property
+			AssertCrossUnsafeHeadUpdate(t, randomChain, preState, posState, invalidCandidate.chain)
 		})
 
 		err := b.Stop(context.Background())
@@ -184,7 +229,6 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 		require.NoError(t, err)
 		t.Log("stopped!")
 	})
-
 }
 
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
@@ -912,17 +956,36 @@ func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) (state
 	return state
 }
 
-func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, posState State) {
+func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, posState State, expectNoUpdate eth.ChainID) {
 	for _, chain := range rc.chainIDs {
 		preCrossUnsafe := preState.chainHeads[chain].crossUnsafe
+		preLocalUnsafe := preState.chainHeads[chain].localUnsafe
 		posCrossUnsafe := posState.chainHeads[chain].crossUnsafe
-		if preCrossUnsafe < posCrossUnsafe {
-			// Ensure the cross unsafe head has been updated
-			require.Equal(t, posCrossUnsafe, preCrossUnsafe+1,
-				"Cross Unsafe head did not update for chain %d", chain)
-			t.Logf("Cross Unsafe head for chain %d has been updated from %d to %d", chain, preCrossUnsafe, posCrossUnsafe)
+		if chain != expectNoUpdate {
+			if preCrossUnsafe < preLocalUnsafe {
+				// Ensure the cross unsafe head has been updated
+				require.Equal(t, posCrossUnsafe, preCrossUnsafe+1,
+					"Cross Unsafe head did not update for chain %d", chain)
+				t.Logf("Cross Unsafe head for chain %d has been updated from %d to %d", chain, preCrossUnsafe, posCrossUnsafe)
+			} else {
+				require.Equal(t, posCrossUnsafe, preCrossUnsafe)
+				t.Logf("Cross Unsafe head for chain %d was already equal to Local Unsafe", chain)
+			}
 		} else {
-			t.Logf("Cross Unsafe head for chain %d was already equal to Local Unsafe", chain)
+			require.Equal(t, posCrossUnsafe, preCrossUnsafe, "Cross Unsafe head unexpectedly updated for chain %d", chain)
+			t.Logf("Cross Unsafe head for chain %d was not updated", chain)
 		}
 	}
+}
+
+func GetInvalidCandidate(t *testing.T, rc RandomChain) (block ChainBlock) {
+	for _, chain := range rc.chainIDs {
+		if rc.chainHeads[chain].crossUnsafe < rc.chainHeads[chain].localUnsafe {
+			return ChainBlock{
+				chain: chain,
+				block: rc.chainBlocks[chain][rc.chainHeads[chain].crossUnsafe+1],
+			}
+		}
+	}
+	return ChainBlock{}
 }

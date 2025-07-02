@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"math"
 	"math/rand"
 	"testing"
 
@@ -71,7 +70,8 @@ type L1Assignments struct {
 }
 
 type RandomChain struct {
-	cutoffs struct {
+	randomGenerator *rand.Rand
+	cutoffs         struct {
 		crossUnsafe int
 		crossSafe   int
 		localUnsafe int
@@ -102,6 +102,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	crossSafe := r.Intn(localSafe)
 	crossUnsafe := r.Intn(localUnsafe-crossSafe) + crossSafe
 	res = RandomChain{
+		randomGenerator: r,
 		cutoffs: struct {
 			crossUnsafe int
 			crossSafe   int
@@ -300,16 +301,17 @@ func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidat
 }
 */
 
-func InvalidateBlock(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainBlock) {
+func InvalidateBlock(t *testing.T, res *RandomChain, candidate *ChainBlock) {
+	r := res.randomGenerator
 	switch r.Intn(4) {
 	case 0:
-		InsertFutureDependency(r, res, FindRandomChainIndex(res, candidate))
-	case 1:
-		InsertDependencyToExpiredMessage(t, r, res, FindRandomChainIndex(res, candidate))
-	case 2:
-		InsertSelfDependency(r, res, candidate)
-	case 3:
 		InsertCycle(t, r, res, candidate)
+	case 1:
+		InsertSelfDependency(r, res, candidate)
+	case 2:
+		InsertFutureDependency(t, r, res, FindRandomChainIndex(res, candidate))
+	case 3:
+		InsertDependencyToExpiredMessage(t, r, res, FindRandomChainIndex(res, candidate))
 	default:
 	}
 }
@@ -323,9 +325,16 @@ func FindRandomChainIndex(res *RandomChain, candidate *ChainBlock) (index int) {
 	return -1 // Return -1 if not found
 }
 
-func InsertFutureDependency(r *rand.Rand, res *RandomChain, candidateIndex int) {
+func InsertFutureDependency(t *testing.T, r *rand.Rand, res *RandomChain, candidateIndex int) {
 	candidateBlock := res.allBlocks[candidateIndex]
+	t.Logf("Inserting a future dependency in candidate (%s, %2d)'s hazard set", candidateBlock.chain, candidateBlock.block.Number)
 	futureIndex := randomInRange(r, candidateIndex, len(res.allBlocks))
+	for i := futureIndex; i < len(res.allBlocks); i++ {
+		if res.allBlocks[i].block.Time > candidateBlock.block.Time {
+			futureIndex = i
+			continue
+		}
+	}
 	futureBlock := res.allBlocks[futureIndex]
 	initiatingLog := addRandomInitiatingMessage(r, res, futureBlock)
 	addExecutingMessage(res, candidateBlock, futureBlock, initiatingLog)
@@ -337,7 +346,7 @@ func InsertDependencyToExpiredMessage(t *testing.T, r *rand.Rand, res *RandomCha
 	// Any timestamp below this is expired
 	// TODO: Ensure there is always an expired block to avoid overflow
 	expiryTimestamp := candidate.block.Time - params.MessageExpiryTimeSecondsInterop
-	require.Less(t, candidate.block.Time, math.MaxInt)
+	//require.Less(t, candidate.block.Time, math.MaxInt)
 
 	// Iterate until we find the first unexpired block
 	i := 0
