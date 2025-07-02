@@ -115,7 +115,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
 			ex.Enqueue(event.AnnotatedEvent{
@@ -131,7 +131,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -153,7 +153,7 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 		t.Run("UpdateCrossSafeRequestEvent", func(t *testing.T) {
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			ex.Enqueue(event.AnnotatedEvent{
 				Event:        superevents.UpdateCrossSafeRequestEvent{},
@@ -168,7 +168,7 @@ func FuzzUpdateCrossSafeInvariants(f *testing.F) {
 			t.Log("UpdateCrossSafeRequestEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -191,7 +191,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 		t.Run("LocalSafeUpdateEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
 			localSafeHead := randomChain.chainHeads[chainA].localSafe
@@ -229,7 +229,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			t.Log("LocalSafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -252,7 +252,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 		t.Run("LocalDerivedEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
 			localSafeHead := randomChain.chainHeads[chainA].localSafe
@@ -283,7 +283,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			t.Log("LocalDerivedEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -305,7 +305,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 		t.Run("ReplaceBlockEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
 			crossSafeHeadCandidate := randomChain.chainHeads[chainA].crossSafe + 1
@@ -349,7 +349,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 			t.Log("ReplaceBlockEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -375,7 +375,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 		t.Run("ChainProcessEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 
 			newHash := make([]byte, 32)
 			rand.Read(newHash)
@@ -410,7 +410,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 			t.Log("ChainProcessEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -432,7 +432,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		ChainsInit(t, b, ex, randomChain)
 
 		t.Log("Initial State")
-		AssertInvariants(t, b)
+		AssertInvariants(t, b, randomChain)
 
 		t.Run("LocalUnsafeUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
@@ -447,7 +447,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("LocalUnsafeReceivedEvent", func(t *testing.T) {
@@ -463,7 +463,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeReceivedEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("CrossUnsafeUpdateEvent", func(t *testing.T) {
@@ -479,7 +479,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("CrossSafeUpdateEvent", func(t *testing.T) {
@@ -495,7 +495,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossSafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("FinalizedL1UpdateEvent", func(t *testing.T) {
@@ -513,7 +513,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1UpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("FinalizedL2UpdateEvent", func(t *testing.T) {
@@ -529,7 +529,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL2UpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("InvalidateLocalSafeEvent", func(t *testing.T) {
@@ -545,7 +545,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("InvalidateLocalSafeEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("ChainRewoundEvent", func(t *testing.T) {
@@ -561,7 +561,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("ChainRewoundEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("UpdateLocalSafeFailedEvent", func(t *testing.T) {
@@ -577,7 +577,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("UpdateLocalSafeFailedEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("LocalDerivedOriginUpdateEvent", func(t *testing.T) {
@@ -593,7 +593,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalDerivedOriginUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
@@ -609,7 +609,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1RequestEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b)
+			AssertInvariants(t, b, randomChain)
 		})
 
 		err := b.Stop(context.Background())
@@ -624,11 +624,11 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	dataDir := t.TempDir()
 	dependencies := make(map[eth.ChainID]*depset.StaticConfigDependency)
 
-	for i := range chainParams.chainCount {
-		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+	for i, chain := range randomChain.chainIDs {
+		chainint, _ := chain.Uint64()
 
 		dependencies[chain] = &depset.StaticConfigDependency{
-			ChainIndex:     types.ChainIndex(900 + i),
+			ChainIndex:     types.ChainIndex(uint32(chainint)),
 			ActivationTime: uint64(42 + i),
 			HistoryMinTime: uint64(100 + i),
 		}
@@ -657,8 +657,7 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	l1Src := &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
 
-	for i := range chainParams.chainCount {
-		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
+	for _, chain := range randomChain.chainIDs {
 		srcChain := randomChain.chainSources[chain]
 		require.NoError(t, b.AttachProcessorSource(chain, srcChain))
 	}
@@ -672,9 +671,7 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
 
-	for i := range chainParams.chainCount {
-		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-
+	for _, chain := range randomChain.chainIDs {
 		chainHeads := randomChain.chainHeads[chain]
 		localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
 		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
@@ -780,10 +777,8 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
-func AssertInvariants(t *testing.T, b *SupervisorBackend) {
-	for i := range chainParams.chainCount {
-		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-
+func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) {
+	for _, chain := range rc.chainIDs {
 		t.Logf("Chain %d:", chain)
 
 		CrossUnsafe_LE_LocalUnsafe(t, b, chain)
