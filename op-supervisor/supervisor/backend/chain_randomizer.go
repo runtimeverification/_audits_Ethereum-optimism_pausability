@@ -219,6 +219,10 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		if block.Number == 0 {
 			continue
 		}
+
+		// Add an unimportant message at index 0 that can be modified later by the InsertCycle function
+		addRandomInitiatingMessage(r, &res, initcb)
+
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := r.Intn(totalLength-initIndex) + initIndex
 			execcb := res.allBlocks[execIndex]
@@ -258,6 +262,13 @@ func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBloc
 	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(initiatingLog.Index), initiatingLog)
 	execLog.Index = uint(len(res.generatedLogs[*execcb]))
 	res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
+	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
+}
+
+func insertExecutingMessageAt(i uint, res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
+	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(initiatingLog.Index), initiatingLog)
+	execLog.Index = i
+	res.generatedLogs[*execcb][i] = execLog
 	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 }
 
@@ -426,9 +437,11 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainB
 	cycleEnd := subHazards[r.Intn(len(subHazards))]
 	t.Logf("Picked random hazard set element to end the cycle: (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number)
 
-	// Add executing message from cycleEnd to the first log of cycleStart
-	initiatingLog := res.generatedLogs[*cycleStart][0]
-	addExecutingMessage(res, cycleEnd, cycleStart, initiatingLog)
+	// Add executing message from first log of cycleEnd to last log of cycleStart
+	lastIndex := len(res.generatedLogs[*cycleStart]) - 1
+	initiatingLog := res.generatedLogs[*cycleStart][lastIndex]
+	// Replace dummy message at index 0
+	insertExecutingMessageAt(0, res, cycleEnd, cycleStart, initiatingLog)
 	t.Logf("Added cyclic dependency: (%s, %2d) -> (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number, cycleStart.chain, cycleStart.block.Number)
 }
 
