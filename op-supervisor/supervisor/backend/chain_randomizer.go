@@ -21,12 +21,12 @@ import (
 
 const testChainIDOffset = 900
 
-func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log *types2.Log) *types2.Log {
+func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log *types2.Log) *types2.Log {
 	msg := types.Message{
 		Identifier: types.Identifier{
 			Origin:      log.Address,
 			BlockNumber: block.Number,
-			LogIndex:    log_index,
+			LogIndex:    uint32(log.Index),
 			Timestamp:   block.Time,
 			ChainID:     chain,
 		},
@@ -37,7 +37,7 @@ func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log 
 		Address: params2.InteropCrossL2InboxAddress,
 		Data:    data,
 		Topics:  topics,
-		Index:   uint(log_index),
+		Index:   log.Index,
 	}
 }
 
@@ -276,14 +276,14 @@ func addRandomInitiatingMessage(r *rand.Rand, res *RandomChain, initcb *ChainBlo
 }
 
 func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
-	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(initiatingLog.Index), initiatingLog)
+	execLog := ExecMsgForLog(initcb.chain, *initcb.block, initiatingLog)
 	execLog.Index = uint(len(res.generatedLogs[*execcb]))
 	res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
 	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 }
 
 func insertExecutingMessageAt(i uint, res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
-	execLog := ExecMsgForLog(initcb.chain, *initcb.block, uint32(initiatingLog.Index), initiatingLog)
+	execLog := ExecMsgForLog(initcb.chain, *initcb.block, initiatingLog)
 	execLog.Index = i
 	res.generatedLogs[*execcb][i] = execLog
 	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
