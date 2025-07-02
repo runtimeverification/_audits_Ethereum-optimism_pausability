@@ -223,10 +223,6 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := r.Intn(totalLength-initIndex) + initIndex
 			execcb := res.allBlocks[execIndex]
-			//_, execBlock := execcb.chain, execcb.block
-			//if execBlock == block {
-			//	continue
-			//}
 			initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
 			addExecutingMessage(&res, execcb, initcb, initiatingLog)
 		}
