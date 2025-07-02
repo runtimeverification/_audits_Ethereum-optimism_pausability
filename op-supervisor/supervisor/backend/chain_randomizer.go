@@ -410,7 +410,7 @@ func InsertDependencyToExpiredMessage(t *testing.T, r *rand.Rand, res *RandomCha
 	candidate := res.allBlocks[candidateIndex]
 
 	// We set the timestamps so that this is true for every block that can be selected as candidate
-	require.Less(t, params.MessageExpiryTimeSecondsInterop, candidate.block.Time)
+	require.Less(t, uint64(params.MessageExpiryTimeSecondsInterop), candidate.block.Time)
 
 	// Any timestamp below this is expired
 	expiryTimestamp := candidate.block.Time - params.MessageExpiryTimeSecondsInterop
