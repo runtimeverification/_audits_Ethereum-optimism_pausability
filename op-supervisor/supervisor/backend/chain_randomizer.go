@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"testing"
 
@@ -10,9 +11,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
+	params2 "github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/cross"
@@ -35,7 +37,7 @@ func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log_index uint32, log 
 	}
 	topics, data := msg.EncodeEvent()
 	return &types2.Log{
-		Address: params.InteropCrossL2InboxAddress,
+		Address: params2.InteropCrossL2InboxAddress,
 		Data:    data,
 		Topics:  topics,
 		Index:   uint(log_index),
@@ -276,6 +278,75 @@ func GenerateReceiptsFromLogs(res *RandomChain) {
 		source := res.chainSources[chain]
 		source.ExpectFetchReceipts(block.Hash, types2.Receipts{&rcpt}, nil)
 	}
+}
+
+// Returns a random integer in the interval [lowerIncluding, upperExcluding)
+func randomInRange(r *rand.Rand, lowerIncluding int, upperExcluding int) int {
+	return r.Intn(upperExcluding-lowerIncluding) + lowerIncluding
+}
+
+/*
+func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidateIndex int) {
+	candidateBlock := res.allBlocks[candidateIndex]
+	randomIndex := r.Intn(candidateIndex + 1)
+	randomBlock := res.allBlocks[randomIndex]
+	randomLogIndex := r.Intn(len(res.generatedLogs[*randomBlock]))
+	randomLog := res.generatedLogs[*randomBlock][randomLogIndex]
+
+	switch r.Intn(5) {
+	case 0:
+		// Invalid origin
+	case 1:
+		// Invalid block number
+	case 2:
+		// Invalid log index
+	case 3:
+		// Invalid timestamp
+	case 4:
+		// Invalid chain ID
+	}
+}
+*/
+
+func InsertFutureDependency(r *rand.Rand, res *RandomChain, candidateIndex int) {
+	candidateBlock := res.allBlocks[candidateIndex]
+	futureIndex := randomInRange(r, candidateIndex, len(res.allBlocks))
+	futureBlock := res.allBlocks[futureIndex]
+	initiatingLog := addRandomInitiatingMessage(r, res, futureBlock)
+	addExecutingMessage(res, candidateBlock, futureBlock, initiatingLog)
+}
+
+func InsertDependencyToExpiredMessage(t *testing.T, r *rand.Rand, res *RandomChain, candidateIndex int) {
+	candidate := res.allBlocks[candidateIndex]
+
+	// Any timestamp below this is expired
+	// TODO: Ensure there is always an expired block to avoid overflow
+	expiryTimestamp := candidate.block.Time - params.MessageExpiryTimeSecondsInterop
+	require.Less(t, candidate.block.Time, math.MaxInt)
+
+	// Iterate until we find the first unexpired block
+	i := 0
+	for res.allBlocks[i].block.Time < expiryTimestamp {
+		i++
+	}
+
+	// TODO: Ensure there is always an expired block
+	expiredIndex := r.Intn(i)
+	expiredBlock := res.allBlocks[expiredIndex]
+	initiatingLog := addRandomInitiatingMessage(r, res, expiredBlock)
+	addExecutingMessage(res, candidate, expiredBlock, initiatingLog)
+}
+
+func InsertSelfDependency(r *rand.Rand, res *RandomChain, candidate *ChainBlock) {
+	// Create a random initiating message to be inserted at index N+1
+	initiatingLog := testutils.RandomLog(r)
+	initiatingLog.Index = uint(len(res.generatedLogs[*candidate]) + 1)
+
+	// Insert executing message at index N
+	addExecutingMessage(res, candidate, candidate, initiatingLog)
+
+	// Insert initiating message at index N+1
+	res.generatedLogs[*candidate] = append(res.generatedLogs[*candidate], initiatingLog)
 }
 
 func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
