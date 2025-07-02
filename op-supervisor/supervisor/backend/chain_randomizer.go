@@ -95,12 +95,12 @@ func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, h
 
 func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	r := rand.New(rand.NewSource(seed))
-	totalLength := r.Intn(p.maxLength-p.minLength) + p.minLength
+	totalLength := randomInRange(r, p.minLength, p.maxLength)
 
 	localUnsafe := totalLength - 1
-	localSafe := r.Intn(totalLength-1) + 1
+	localSafe := randomInRange(r, 1, totalLength)
 	crossSafe := r.Intn(localSafe)
-	crossUnsafe := r.Intn(localUnsafe-crossSafe) + crossSafe
+	crossUnsafe := randomInRange(r, crossSafe, localUnsafe)
 	res = RandomChain{
 		randomGenerator: r,
 		cutoffs: struct {
@@ -224,7 +224,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		addRandomInitiatingMessage(r, &res, initcb)
 
 		for r.Intn(100) < p.dependencyChance {
-			execIndex := r.Intn(totalLength-initIndex) + initIndex
+			execIndex := randomInRange(r, initIndex, totalLength)
 			execcb := res.allBlocks[execIndex]
 			initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
 			addExecutingMessage(&res, execcb, initcb, initiatingLog)
@@ -238,7 +238,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	nextL1 := testutils.RandomBlockRef(r)
 	for taken < totalLength {
 		nextL1 = testutils.NextRandomRef(r, nextL1)
-		take := r.Intn(4) + 1 // Take 1-4 L2 blocks
+		take := randomInRange(r, 1, 5) // Take 1-4 L2 blocks
 		take = min(totalLength-taken, take)
 		l1Derivation := L1Assignments{
 			L1Block:  nextL1,
