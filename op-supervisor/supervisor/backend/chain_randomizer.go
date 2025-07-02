@@ -282,6 +282,13 @@ func addExecutingMessage(res *RandomChain, execcb *ChainBlock, initcb *ChainBloc
 	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
 }
 
+func addInvalidExecutingMessage(r *rand.Rand, res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
+	execLog := InvalidExecMsgForLog(r, res, initcb.chain, *initcb.block, initiatingLog)
+	execLog.Index = uint(len(res.generatedLogs[*execcb]))
+	res.generatedLogs[*execcb] = append(res.generatedLogs[*execcb], execLog)
+	res.dependencies[*execcb] = append(res.dependencies[*execcb], initcb)
+}
+
 func insertExecutingMessageAt(i uint, res *RandomChain, execcb *ChainBlock, initcb *ChainBlock, initiatingLog *types2.Log) {
 	execLog := ExecMsgForLog(initcb.chain, *initcb.block, initiatingLog)
 	execLog.Index = i
@@ -306,7 +313,46 @@ func randomInRange(r *rand.Rand, lowerIncluding int, upperExcluding int) int {
 	return r.Intn(upperExcluding-lowerIncluding) + lowerIncluding
 }
 
-/*
+func InvalidExecMsgForLog(r *rand.Rand, res *RandomChain, chain eth.ChainID, block eth.BlockRef, log *types2.Log) *types2.Log {
+	msg := types.Message{
+		Identifier: types.Identifier{
+			Origin:      log.Address,
+			BlockNumber: block.Number,
+			LogIndex:    uint32(log.Index),
+			Timestamp:   block.Time,
+			ChainID:     chain,
+		},
+		PayloadHash: processors.LogToPayloadHash(log),
+	}
+
+	switch r.Intn(5) {
+	case 0:
+		// Invalid origin
+		msg.Identifier.Origin = common.HexToAddress("0xffffffffffffffffffffffffffffffffffffffff")
+	case 1:
+		// Invalid block number
+		msg.Identifier.BlockNumber += uint64(randomInRange(r, 1, 10))
+	case 2:
+		// Invalid log index
+		msg.Identifier.LogIndex += uint32(randomInRange(r, 1, 5))
+	case 3:
+		// Invalid timestamp
+		msg.Identifier.Timestamp -= uint64(randomInRange(r, 1, 100))
+	case 4:
+		// Invalid chain ID
+		impossibleChainID := testChainIDOffset + len(res.chainIDs)
+		msg.Identifier.ChainID = eth.ChainIDFromUInt64(uint64(impossibleChainID))
+	}
+
+	topics, data := msg.EncodeEvent()
+	return &types2.Log{
+		Address: params2.InteropCrossL2InboxAddress,
+		Data:    data,
+		Topics:  topics,
+		Index:   log.Index,
+	}
+}
+
 func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidateIndex int) {
 	candidateBlock := res.allBlocks[candidateIndex]
 	randomIndex := r.Intn(candidateIndex + 1)
@@ -314,20 +360,8 @@ func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidat
 	randomLogIndex := r.Intn(len(res.generatedLogs[*randomBlock]))
 	randomLog := res.generatedLogs[*randomBlock][randomLogIndex]
 
-	switch r.Intn(5) {
-	case 0:
-		// Invalid origin
-	case 1:
-		// Invalid block number
-	case 2:
-		// Invalid log index
-	case 3:
-		// Invalid timestamp
-	case 4:
-		// Invalid chain ID
-	}
+	addInvalidExecutingMessage(r, res, candidateBlock, randomBlock, randomLog)
 }
-*/
 
 func InvalidateBlock(t *testing.T, res *RandomChain, candidate *ChainBlock) {
 	r := res.randomGenerator
@@ -340,6 +374,8 @@ func InvalidateBlock(t *testing.T, res *RandomChain, candidate *ChainBlock) {
 		InsertFutureDependency(t, r, res, FindRandomChainIndex(res, candidate))
 	case 3:
 		InsertDependencyToExpiredMessage(t, r, res, FindRandomChainIndex(res, candidate))
+	case 4:
+		InsertMessageWithInvalidIdentifier(r, res, FindRandomChainIndex(res, candidate))
 	default:
 	}
 }
