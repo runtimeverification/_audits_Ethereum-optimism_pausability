@@ -10,14 +10,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	params2 "github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/cross"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/processors"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
@@ -245,8 +243,6 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		taken += take
 	}
 
-	GenerateReceiptsFromLogs(&res)
-
 	return res
 }
 
@@ -304,6 +300,29 @@ func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidat
 }
 */
 
+func InvalidateBlock(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainBlock) {
+	switch r.Intn(4) {
+	case 0:
+		InsertFutureDependency(r, res, FindRandomChainIndex(res, candidate))
+	case 1:
+		InsertDependencyToExpiredMessage(t, r, res, FindRandomChainIndex(res, candidate))
+	case 2:
+		InsertSelfDependency(r, res, candidate)
+	case 3:
+		InsertCycle(t, r, res, candidate)
+	default:
+	}
+}
+
+func FindRandomChainIndex(res *RandomChain, candidate *ChainBlock) (index int) {
+	for i, cb := range res.allBlocks {
+		if cb.chain == candidate.chain && cb.block == candidate.block {
+			return i
+		}
+	}
+	return -1 // Return -1 if not found
+}
+
 func InsertFutureDependency(r *rand.Rand, res *RandomChain, candidateIndex int) {
 	candidateBlock := res.allBlocks[candidateIndex]
 	futureIndex := randomInRange(r, candidateIndex, len(res.allBlocks))
@@ -345,7 +364,7 @@ func InsertSelfDependency(r *rand.Rand, res *RandomChain, candidate *ChainBlock)
 	res.generatedLogs[*candidate] = append(res.generatedLogs[*candidate], initiatingLog)
 }
 
-func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) []*ChainBlock {
+func listHazards(t *testing.T, res *RandomChain, candidate *ChainBlock) []*ChainBlock {
 	hazards := make([]*ChainBlock, 0)
 	includedHazards := make(map[eth.ChainID]*ChainBlock)
 
@@ -379,10 +398,10 @@ func listHazards(t *testing.T, res *RandomChain, deps cross.HazardDeps, logger l
 	return hazards
 }
 
-func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, deps cross.HazardDeps, logger log.Logger, candidate *ChainBlock) {
+func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainBlock) {
 	t.Logf("Inserting a cycle in candidate (%s, %2d)'s hazard set", candidate.chain, candidate.block.Number)
 
-	candidateHazards := listHazards(t, res, deps, logger, candidate)
+	candidateHazards := listHazards(t, res, candidate)
 	cycleStart := candidateHazards[r.Intn(len(candidateHazards))]
 	t.Logf("Picked random hazard set element to start the cycle: (%s, %2d)", cycleStart.chain, cycleStart.block.Number)
 
@@ -392,7 +411,7 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, deps cross.Hazard
 		require.Equal(t, cycleStart.block.Number, candidate.block.Number)
 		subHazards = candidateHazards
 	} else {
-		subHazards = listHazards(t, res, deps, logger, cycleStart)
+		subHazards = listHazards(t, res, cycleStart)
 	}
 
 	cycleEnd := subHazards[r.Intn(len(subHazards))]

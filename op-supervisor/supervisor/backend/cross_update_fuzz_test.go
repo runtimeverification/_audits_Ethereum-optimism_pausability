@@ -114,9 +114,10 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
-		ChainsInit(t, b, ex, randomChain)
 
-		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
+		t.Run("UpdateCrossUnsafeRequestEvent Success", func(t *testing.T) {
+			ChainsInit(t, b, ex, randomChain)
+
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
 			preState := AssertInvariants(t, b, randomChain)
@@ -135,9 +136,10 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
 			t.Log("Final State")
+			// Assert the invariants hold after handling the event - Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 
-			// Check that the state has changed
+			// Check that the state has changed - Liveness property
 			AssertCrossUnsafeHeadUpdate(t, randomChain, preState, posState)
 		})
 
@@ -770,16 +772,8 @@ func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec,
 }
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
-	for exec, inits := range randomChain.dependencies {
-		for _, init := range inits {
-			t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
-		}
-	}
-	for cb, logs := range randomChain.generatedLogs {
-		chain := cb.chain
-		block := cb.block
-		t.Logf("Generating receipt for (%s, %2d, %s) with %d logs", chain, block.Number, block.Hash, len(logs))
-	}
+	GenerateReceiptsFromLogs(&randomChain)
+
 	for _, chain := range randomChain.chainIDs {
 		chainHeads := randomChain.chainHeads[chain]
 		localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
