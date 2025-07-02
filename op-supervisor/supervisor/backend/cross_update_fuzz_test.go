@@ -50,6 +50,10 @@ import (
 // 16 - ReplaceBlockEvent
 // 17 - FinalizedL1RequestEvent
 
+type State struct {
+	chainHeads map[eth.ChainID]*ChainHeads
+}
+
 func FuzzRandomChains(f *testing.F) {
 	params := RandomChainParams{
 		chainCount: 4,
@@ -115,7 +119,7 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 		t.Run("UpdateCrossUnsafeRequestEvent", func(t *testing.T) {
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
-			AssertInvariants(t, b, randomChain)
+			preState := AssertInvariants(t, b, randomChain)
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
 			ex.Enqueue(event.AnnotatedEvent{
@@ -131,7 +135,10 @@ func FuzzUpdateCrossUnsafeInvariants(f *testing.F) {
 			t.Log("UpdateCrossUnsafeRequestEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+
+			// Check that the state has changed
+			AssertCrossUnsafeHeadUpdate(t, randomChain, preState, posState)
 		})
 
 		err := b.Stop(context.Background())
@@ -873,7 +880,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 	t.Log("Chains initialized!")
 }
 
-func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
+func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID, state State) {
 
 	localUnsafe, err := b.LocalUnsafe(context.Background(), chain)
 	require.NoError(t, err)
@@ -881,11 +888,12 @@ func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.Ch
 	require.NoError(t, err)
 
 	t.Logf("\t- Cross Unsafe head %d <= Local Unsafe head %d", crossUnsafe.Number, localUnsafe.Number)
-
+	state.chainHeads[chain].crossUnsafe = crossUnsafe.Number
+	state.chainHeads[chain].localUnsafe = localUnsafe.Number
 	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number, "Cross Unsafe head: %d is not less or equal than Local Unsafe head: %d", crossUnsafe.Number, localUnsafe.Number)
 }
 
-func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID) {
+func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID, state State) {
 
 	localSafe, err := b.LocalSafe(context.Background(), chain)
 	require.NoError(t, err)
@@ -893,15 +901,34 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	require.NoError(t, err)
 
 	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
-
+	state.chainHeads[chain].crossSafe = crossSafe.Derived.Number
+	state.chainHeads[chain].localSafe = localSafe.Derived.Number
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
-func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) {
+func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) (state State) {
+	state.chainHeads = make(map[eth.ChainID]*ChainHeads)
 	for _, chain := range rc.chainIDs {
 		t.Logf("Chain %d:", chain)
+		state.chainHeads[chain] = &ChainHeads{}
 
-		CrossUnsafe_LE_LocalUnsafe(t, b, chain)
-		CrossSafe_LE_LocalSafe(t, b, chain)
+		CrossUnsafe_LE_LocalUnsafe(t, b, chain, state)
+		CrossSafe_LE_LocalSafe(t, b, chain, state)
+	}
+	return state
+}
+
+func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, posState State) {
+	for _, chain := range rc.chainIDs {
+		preCrossUnsafe := preState.chainHeads[chain].crossUnsafe
+		posCrossUnsafe := posState.chainHeads[chain].crossUnsafe
+		if preCrossUnsafe < posCrossUnsafe {
+			// Ensure the cross unsafe head has been updated
+			require.Equal(t, posCrossUnsafe, preCrossUnsafe+1,
+				"Cross Unsafe head did not update for chain %d", chain)
+			t.Logf("Cross Unsafe head for chain %d has been updated from %d to %d", chain, preCrossUnsafe, posCrossUnsafe)
+		} else {
+			t.Logf("Cross Unsafe head for chain %d was already equal to Local Unsafe", chain)
+		}
 	}
 }
