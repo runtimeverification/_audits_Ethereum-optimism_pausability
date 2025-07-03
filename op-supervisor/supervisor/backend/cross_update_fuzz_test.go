@@ -242,7 +242,7 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 
-	f.Add(int64(-148))
+	f.Add(int64(276))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
@@ -281,7 +281,6 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 	})
 }
 
-/*
 func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 	f.Add(int64(63))
