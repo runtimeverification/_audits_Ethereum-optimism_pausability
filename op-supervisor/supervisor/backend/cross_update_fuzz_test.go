@@ -181,6 +181,9 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 		t.Run("UpdateCrossUnsafeRequestEvent Fails", func(t *testing.T) {
 			// Invalidate a block
 			crossUnsafeCandidate := GetCrossUnsafeCandidate(randomChain)
+			if crossUnsafeCandidate == nil {
+				t.Skip()
+			}
 			InvalidateBlock(t, &randomChain, crossUnsafeCandidate)
 			ChainsInit(t, b, ex, randomChain)
 
@@ -259,19 +262,22 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 
 func FuzzUpdateCrossSafeFails(f *testing.F) {
 
-	f.Add(int64(30))
+	f.Add(int64(63))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
 
 		t.Run("UpdateCrossSafeRequestEvent Fails", func(t *testing.T) {
-			invalidCandidate := GetCrossSafeCandidate(randomChain)
-			InvalidateBlock(t, &randomChain, invalidCandidate)
+			crossSafeCandidate := GetCrossSafeCandidate(randomChain)
+			if crossSafeCandidate == nil {
+				t.Skip()
+			}
+			InvalidateBlock(t, &randomChain, crossSafeCandidate)
 			ChainsInit(t, b, ex, randomChain)
 
 			// Ensure the invariants hold in the intiial state
-			t.Log("Initial State")
+			t.Logf("Initial State with seed %d", seed)
 			preState := AssertInvariants(t, b, randomChain)
 
 			ex.Enqueue(event.AnnotatedEvent{
@@ -291,7 +297,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 			posState := AssertInvariants(t, b, randomChain)
 
 			// Check that the state has changed as expected - Liveness property
-			AssertCrossSafeHeadUpdate(t, randomChain, preState, posState, invalidCandidate.chain)
+			AssertCrossSafeHeadUpdate(t, randomChain, preState, posState, crossSafeCandidate.chain)
 		})
 
 		err := b.Stop(context.Background())

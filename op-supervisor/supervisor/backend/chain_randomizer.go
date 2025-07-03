@@ -254,7 +254,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	// Add dependencies for candidates
 	candidateDependencyChance := p.dependencyChance
 	crossUnsafeCandidate := GetCrossUnsafeCandidate(res)
-	crossSafeCandidate := GetCrossUnsafeCandidate(res)
+	crossSafeCandidate := GetCrossSafeCandidate(res)
 
 	addCandidateDeps := func(candidate *ChainBlock) {
 		if candidate != nil {
