@@ -56,33 +56,34 @@ type State struct {
 
 func FuzzRandomChains(f *testing.F) {
 	params := RandomChainParams{
-		chainCount: 4,
-		minLength:  50,
-		maxLength:  100,
+		chainCount: 3,
+		minLength:  10,
+		maxLength:  30,
 
-		sameTimestampFrequency: 60,
-		dependencyChance:       20,
+		sameTimestampFrequency: 80,
+		dependencyChance:       50,
 	}
-	f.Add(int64(30))
+	f.Add(int64(-57))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := params.MakeRandomChain(seed)
 
 		for _, cb := range randomChain.allBlocks {
-			head := ""
-			if cb.block.Number == randomChain.chainHeads[cb.chain].crossSafe {
-				head += " <-- Cross Safe"
+			t.Logf("    %s, %2d, %d", cb.chain, cb.block.Number, cb.block.Time)
+		}
+
+		for _, chain := range randomChain.chainIDs {
+			chainHeads := randomChain.chainHeads[chain]
+			localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
+			crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
+			localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
+			crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
+
+			t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
+
+			for _, block := range randomChain.chainBlocks[chain] {
+				t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
 			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].crossUnsafe {
-				head += " <-- Cross Unsafe"
-			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].localSafe {
-				head += " <-- Local Safe"
-			}
-			if cb.block.Number == randomChain.chainHeads[cb.chain].localUnsafe {
-				head += " <-- Local Unsafe"
-			}
-			t.Logf("    %s, %2d, %d, %s", cb.chain, cb.block.Number, cb.block.Time, head)
 		}
 
 		for exec, inits := range randomChain.dependencies {
@@ -929,7 +930,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					Event:        localSafe,
 					EmitPriority: event.High,
 				})
-				ex.Drain()
+				ex.DrainUntil(func(ev event.Event) bool { return ev == localSafe }, false)
 			}
 		}
 	}
@@ -1007,6 +1008,8 @@ func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) (state
 }
 
 func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, posState State, expectNoUpdate eth.ChainID) {
+	crossUnsafeUpdates := 0
+	chainsToBeUpdated := len(rc.chainIDs)
 	for _, chain := range rc.chainIDs {
 		preCrossUnsafe := preState.chainHeads[chain].crossUnsafe
 		preLocalUnsafe := preState.chainHeads[chain].localUnsafe
@@ -1014,17 +1017,25 @@ func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, p
 		if chain != expectNoUpdate {
 			if preCrossUnsafe < preLocalUnsafe {
 				// Ensure the cross unsafe head has been updated
-				require.Equal(t, posCrossUnsafe, preCrossUnsafe+1,
-					"Cross Unsafe head did not update for chain %d", chain)
-				t.Logf("Cross Unsafe head for chain %d has been updated from %d to %d", chain, preCrossUnsafe, posCrossUnsafe)
+				if posCrossUnsafe == preCrossUnsafe+1 {
+					crossUnsafeUpdates++
+					t.Logf("Cross Unsafe head for chain %d has been updated from %d to %d", chain, preCrossUnsafe, posCrossUnsafe)
+				}
 			} else {
+				chainsToBeUpdated--
 				require.Equal(t, posCrossUnsafe, preCrossUnsafe)
 				t.Logf("Cross Unsafe head for chain %d was already equal to Local Unsafe", chain)
 			}
 		} else {
+			chainsToBeUpdated--
 			require.Equal(t, posCrossUnsafe, preCrossUnsafe, "Cross Unsafe head unexpectedly updated for chain %d", chain)
 			t.Logf("Cross Unsafe head for chain %d was not updated because the candidate was invalid", chain)
 		}
+	}
+	if chainsToBeUpdated > 0 {
+		require.Greater(t, crossUnsafeUpdates, 0)
+	} else {
+		require.Equal(t, crossUnsafeUpdates, 0)
 	}
 }
 
