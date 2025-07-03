@@ -811,12 +811,14 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 
 		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
 
+		derived := randomChain.chainBlocks[chain][0]
+		source := randomChain.l1Source[ChainBlock{chain, derived}]
 		ex.Enqueue(event.AnnotatedEvent{
 			Event: superevents.AnchorEvent{
 				ChainID: chain,
 				Anchor: types.DerivedBlockRefPair{
-					Derived: *randomChain.chainBlocks[chain][0],
-					Source:  eth.L1BlockRef{},
+					Derived: *derived,
+					Source:  source,
 				}},
 			EmitPriority: event.High,
 		})
@@ -828,8 +830,8 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				return ev == superevents.AnchorEvent{
 					ChainID: chain,
 					Anchor: types.DerivedBlockRefPair{
-						Derived: *randomChain.chainBlocks[chain][0],
-						Source:  eth.L1BlockRef{},
+						Derived: *derived,
+						Source:  source,
 					}}
 			}, false)
 
@@ -857,7 +859,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
 						Derived: *block,
-						Source:  eth.L1BlockRef{},
+						Source:  randomChain.l1Source[ChainBlock{chain, block}],
 					},
 					NodeID: "test-node",
 				}
@@ -882,7 +884,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				ChainID: chain,
 				Derived: types.DerivedBlockRefPair{
 					Derived: *block,
-					Source:  eth.L1BlockRef{},
+					Source:  randomChain.l1Source[ChainBlock{chain, block}],
 				},
 				NodeID: "test-node",
 			}
