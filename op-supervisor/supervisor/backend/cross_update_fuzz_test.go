@@ -172,7 +172,7 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
 func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
-	f.Add(int64(-5))
+	f.Add(int64(63))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
@@ -185,7 +185,7 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 			ChainsInit(t, b, ex, randomChain)
 
 			// Ensure the invariants hold in the intiial state
-			t.Log("Initial State")
+			t.Logf("Initial State with Seed %d", seed)
 			preState := AssertInvariants(t, b, randomChain)
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
@@ -257,7 +257,6 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 	})
 }
 
-/*
 func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 	f.Add(int64(30))
@@ -301,6 +300,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 	})
 }
 
+/*
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 	f.Add(int64(30), bool(false)) // Add initial values for fuzzing
@@ -793,99 +793,6 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	return ex, b
 }
 
-func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
-	for exec, inits := range randomChain.dependencies {
-		for _, init := range inits {
-			t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
-		}
-	}
-	for cb, logs := range randomChain.generatedLogs {
-		chain := cb.chain
-		block := cb.block
-		t.Logf("Generating receipt for (%s, %2d, %s) with %d logs", chain, block.Number, block.Hash, len(logs))
-	}
-	for _, chain := range randomChain.chainIDs {
-		chainHeads := randomChain.chainHeads[chain]
-		localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
-		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
-		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
-
-		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
-
-		for _, block := range randomChain.chainBlocks[chain] {
-			t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
-		}
-
-		ex.Enqueue(event.AnnotatedEvent{
-			Event: superevents.AnchorEvent{
-				ChainID: chain,
-				Anchor: types.DerivedBlockRefPair{
-					Derived: *crossSafe,
-					Source:  eth.L1BlockRef{},
-				}},
-			EmitPriority: event.High,
-		})
-
-		t.Logf("AnchorEvent for chain %d Emmitted", chain)
-
-		ex.DrainUntil(
-			func(ev event.Event) bool {
-				return ev == superevents.AnchorEvent{
-					ChainID: chain,
-					Anchor: types.DerivedBlockRefPair{
-						Derived: *crossSafe,
-						Source:  eth.L1BlockRef{},
-					}}
-			}, false)
-
-		t.Logf("AnchorEvent for chain %d processed", chain)
-
-		for i := crossSafe.Number + 1; i <= localUnsafe; i++ {
-			block := randomChain.chainBlocks[chain][i]
-
-			ex.Enqueue(event.AnnotatedEvent{
-				Event: superevents.ChainProcessEvent{
-					ChainID: chain,
-					Target:  block.Number,
-				},
-				EmitPriority: event.High,
-			})
-			ex.DrainUntil(
-				func(ev event.Event) bool {
-					return ev == superevents.ChainProcessEvent{
-						ChainID: chain,
-						Target:  block.Number}
-				}, false)
-			t.Logf("ChainProcessEvent for chain %d block %d processed", chain, block.Number)
-
-			if block.Number <= localSafe {
-				localSafe := superevents.LocalDerivedEvent{
-					ChainID: chain,
-					Derived: types.DerivedBlockRefPair{
-						Derived: *block,
-						Source:  eth.L1BlockRef{},
-					},
-					NodeID: "test-node",
-				}
-				ex.Enqueue(event.AnnotatedEvent{
-					Event:        localSafe,
-					EmitPriority: event.High,
-				})
-				ex.DrainUntil(
-					func(ev event.Event) bool {
-						return ev == localSafe
-					}, false)
-				t.Logf("LocalDerivedEvent for chain %d block %d processed", chain, block.Number)
-			}
-		}
-
-		err := b.chainDBs.UpdateCrossUnsafe(chain, types.BlockSealFromRef(*crossUnsafe))
-		require.NoError(t, err)
-	}
-	t.Log("Chains initialized!")
-}
-
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
 	GenerateReceiptsFromLogs(&randomChain)
 
@@ -952,7 +859,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					Event:        localSafe,
 					EmitPriority: event.High,
 				})
-				ex.DrainUntil(func(ev event.Event) bool { return ev == localSafe }, false)
+				ex.Drain()
 			}
 		}
 	}
