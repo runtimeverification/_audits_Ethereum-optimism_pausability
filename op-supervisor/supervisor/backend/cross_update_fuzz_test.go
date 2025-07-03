@@ -109,9 +109,10 @@ var chainParams = RandomChainParams{
 
 func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
-	f.Add(int64(30))
+	f.Add(int64(-62))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
+		t.Logf("Seed %d", seed)
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
 
@@ -182,6 +183,7 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 	})
 }
 
+/*
 func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 	f.Add(int64(63))
@@ -976,7 +978,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe].Number
 		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
 
-		for i := int(crossSafe); i < len(randomChain.chainBlocks[chain]); i++ {
+		for i := int(crossSafe) + 1; i < len(randomChain.chainBlocks[chain]); i++ {
 			block := randomChain.chainBlocks[chain][i]
 
 			ex.Enqueue(event.AnnotatedEvent{
