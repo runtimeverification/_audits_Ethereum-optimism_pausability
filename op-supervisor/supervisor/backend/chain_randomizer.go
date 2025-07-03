@@ -85,7 +85,8 @@ type RandomChain struct {
 	chainSources  map[eth.ChainID]*MockProcessorSource
 	chainBlocks   map[eth.ChainID][]*eth.BlockRef
 	chainHeads    map[eth.ChainID]*ChainHeads
-	l1Source      map[ChainBlock]eth.BlockRef
+	l1SourceMap   map[ChainBlock]eth.BlockRef
+	l1Source      map[uint64]eth.BlockRef
 }
 
 func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, heads ChainHeads) {
@@ -130,7 +131,8 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		chainSources:  make(map[eth.ChainID]*MockProcessorSource),
 		chainBlocks:   make(map[eth.ChainID][]*eth.BlockRef),
 		chainHeads:    make(map[eth.ChainID]*ChainHeads),
-		l1Source:      make(map[ChainBlock]eth.BlockRef),
+		l1SourceMap:   make(map[ChainBlock]eth.BlockRef),
+		l1Source:      make(map[uint64]eth.BlockRef),
 	}
 
 	for i := range p.chainCount {
@@ -288,8 +290,9 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		take := randomInRange(r, 1, 5) // Take 1-4 L2 blocks
 		take = min(totalLength-taken, take)
 		for _, l2Block := range res.allBlocks[taken : taken+take] {
-			res.l1Source[*l2Block] = nextL1
+			res.l1SourceMap[*l2Block] = nextL1
 		}
+		res.l1Source[nextL1.Number] = nextL1
 		taken += take
 	}
 

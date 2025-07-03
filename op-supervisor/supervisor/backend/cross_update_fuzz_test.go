@@ -60,14 +60,14 @@ func FuzzRandomChains(f *testing.F) {
 		sameTimestampFrequency: 80,
 		dependencyChance:       50,
 	}
-	f.Add(int64(-5))
+	f.Add(int64(30))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := params.MakeRandomChain(seed)
 
-		for _, cb := range randomChain.allBlocks {
-			t.Logf("    %s, %2d, %d", cb.chain, cb.block.Number, cb.block.Time)
-		}
+		//for _, cb := range randomChain.allBlocks {
+		//	t.Logf("    %s, %2d, %d", cb.chain, cb.block.Number, cb.block.Time)
+		//}
 
 		for _, chain := range randomChain.chainIDs {
 			chainHeads := randomChain.chainHeads[chain]
@@ -76,23 +76,25 @@ func FuzzRandomChains(f *testing.F) {
 			localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
 			crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
 
-			t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
+			t.Logf("\nChain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
 
 			for _, block := range randomChain.chainBlocks[chain] {
 				t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
+				source := randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}]
+				t.Logf("Source %d", source.Number)
 			}
 		}
 
-		for exec, inits := range randomChain.dependencies {
-			for _, init := range inits {
-				t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
-			}
-		}
-		for cb, logs := range randomChain.generatedLogs {
-			chain := cb.chain
-			block := cb.block
-			t.Logf("Generating receipt for (%s, %2d, %s) with %d logs", chain, block.Number, block.Hash, len(logs))
-		}
+		//for exec, inits := range randomChain.dependencies {
+		//	for _, init := range inits {
+		//		t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
+		//	}
+		//}
+		//for cb, logs := range randomChain.generatedLogs {
+		//	chain := cb.chain
+		//	block := cb.block
+		//	t.Logf("Generating receipt for (%s, %2d, %s) with %d logs", chain, block.Number, block.Hash, len(logs))
+		//}
 	})
 }
 
@@ -107,7 +109,7 @@ var chainParams = RandomChainParams{
 
 func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
-	f.Add(int64(192))
+	f.Add(int64(30))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
@@ -115,6 +117,16 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
 		t.Run("UpdateCrossUnsafeRequestEvent Success", func(t *testing.T) {
 			ChainsInit(t, b, ex, randomChain)
+
+			for _, chain := range randomChain.chainIDs {
+				chainHeads := randomChain.chainHeads[chain]
+				localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
+				crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
+				localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
+				crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
+
+				t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
+			}
 
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
@@ -812,7 +824,7 @@ func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec,
 		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
 
 		derived := randomChain.chainBlocks[chain][0]
-		source := randomChain.l1Source[ChainBlock{chain, derived}]
+		source := randomChain.l1SourceMap[ChainBlock{chain, derived}]
 		ex.Enqueue(event.AnnotatedEvent{
 			Event: superevents.AnchorEvent{
 				ChainID: chain,
@@ -859,7 +871,7 @@ func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec,
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
 						Derived: *block,
-						Source:  randomChain.l1Source[ChainBlock{chain, block}],
+						Source:  randomChain.l1SourceMap[ChainBlock{chain, block}],
 					},
 					NodeID: "test-node",
 				}
@@ -884,7 +896,7 @@ func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec,
 				ChainID: chain,
 				Derived: types.DerivedBlockRefPair{
 					Derived: *block,
-					Source:  randomChain.l1Source[ChainBlock{chain, block}],
+					Source:  randomChain.l1SourceMap[ChainBlock{chain, block}],
 				},
 				NodeID: "test-node",
 			}
@@ -908,12 +920,12 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 	GenerateReceiptsFromLogs(&randomChain)
 
 	for _, chain := range randomChain.chainIDs {
-
+		block := randomChain.chainBlocks[chain][0]
 		b.emitter.Emit(superevents.AnchorEvent{
 			ChainID: chain,
 			Anchor: types.DerivedBlockRefPair{
-				Derived: *randomChain.chainBlocks[chain][0],
-				Source:  eth.L1BlockRef{},
+				Derived: *block,
+				Source:  randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}],
 			},
 		})
 	}
@@ -929,20 +941,32 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 
 		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
 
-		for _, block := range randomChain.chainBlocks[chain] {
-			if block.Number <= crossSafe.Number {
+		for i := 1; i <= int(crossSafe.Number); i++ {
+			previous := randomChain.chainBlocks[chain][i-1]
+			previousSource := randomChain.l1SourceMap[ChainBlock{chain: chain, block: previous}]
+			block := randomChain.chainBlocks[chain][i]
+			source := randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}]
+
+			for j := previousSource.Number + 1; j <= source.Number; j++ {
 				crossSafe := superevents.LocalDerivedEvent{
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
-						Derived: *block,
-						Source:  eth.L1BlockRef{},
+						Derived: *previous,
+						Source:  randomChain.l1Source[j],
 					},
 					NodeID: "test-node",
 				}
 				b.emitter.Emit(crossSafe)
-			} else {
-				continue
 			}
+			crossSafe := superevents.LocalDerivedEvent{
+				ChainID: chain,
+				Derived: types.DerivedBlockRefPair{
+					Derived: *block,
+					Source:  source,
+				},
+				NodeID: "test-node",
+			}
+			b.emitter.Emit(crossSafe)
 		}
 	}
 	ex.Drain()
@@ -952,11 +976,8 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe].Number
 		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
 
-		for _, block := range randomChain.chainBlocks[chain] {
-
-			if block.Number < crossSafe {
-				continue
-			}
+		for i := int(crossSafe); i < len(randomChain.chainBlocks[chain]); i++ {
+			block := randomChain.chainBlocks[chain][i]
 
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.ChainProcessEvent{
@@ -974,11 +995,33 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				}, false)
 
 			if block.Number <= localSafe {
+				previous := randomChain.chainBlocks[chain][i-1]
+				previousSource := randomChain.l1SourceMap[ChainBlock{chain: chain, block: previous}]
+				source := randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}]
+
+				for j := previousSource.Number + 1; j <= source.Number; j++ {
+					localSafe := superevents.LocalDerivedEvent{
+						ChainID: chain,
+						Derived: types.DerivedBlockRefPair{
+							Derived: *previous,
+							Source:  randomChain.l1Source[j],
+						},
+						NodeID: "test-node",
+					}
+					ex.Enqueue(event.AnnotatedEvent{
+						Event:        localSafe,
+						EmitPriority: event.High,
+					})
+					ex.DrainUntil(
+						func(ev event.Event) bool {
+							return ev == localSafe
+						}, false)
+				}
 				localSafe := superevents.LocalDerivedEvent{
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
 						Derived: *block,
-						Source:  eth.L1BlockRef{},
+						Source:  randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}],
 					},
 					NodeID: "test-node",
 				}
@@ -992,7 +1035,6 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					}, false)
 			}
 		}
-
 		localUnsafe, _ := b.chainDBs.LocalUnsafe(chain)
 		crossUnsafe := types.BlockSealFromRef(*randomChain.chainBlocks[chain][chainHeads.crossUnsafe])
 		if crossUnsafe.Number > localUnsafe.Number {
