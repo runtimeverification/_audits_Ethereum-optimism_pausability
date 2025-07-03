@@ -159,8 +159,8 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 		t.Run("UpdateCrossUnsafeRequestEvent Fails", func(t *testing.T) {
 			// Invalidate a block
-			crossUnsafeCandidate := GetCrossUnsafeCandidate(t, randomChain)
-			InvalidateBlock(t, &randomChain, &crossUnsafeCandidate)
+			crossUnsafeCandidate := GetCrossUnsafeCandidate(randomChain)
+			InvalidateBlock(t, &randomChain, crossUnsafeCandidate)
 			ChainsInit(t, b, ex, randomChain)
 
 			// Ensure the invariants hold in the intiial state
@@ -245,8 +245,8 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 		ex, b := ExecutorBackendInit(t, randomChain)
 
 		t.Run("UpdateCrossSafeRequestEvent Fails", func(t *testing.T) {
-			invalidCandidate := GetCrossSafeCandidate(t, randomChain)
-			InvalidateBlock(t, &randomChain, &invalidCandidate)
+			invalidCandidate := GetCrossSafeCandidate(randomChain)
+			InvalidateBlock(t, &randomChain, invalidCandidate)
 			ChainsInit(t, b, ex, randomChain)
 
 			// Ensure the invariants hold in the intiial state
@@ -1048,28 +1048,4 @@ func AssertCrossSafeHeadUpdate(t *testing.T, rc RandomChain, preState State, pos
 			t.Logf("Cross Safe head for chain %d was not updated because the candidate was invalid", chain)
 		}
 	}
-}
-
-func GetCrossUnsafeCandidate(t *testing.T, rc RandomChain) (block ChainBlock) {
-	for _, chain := range rc.chainIDs {
-		if rc.chainHeads[chain].crossUnsafe < rc.chainHeads[chain].localUnsafe {
-			return ChainBlock{
-				chain: chain,
-				block: rc.chainBlocks[chain][rc.chainHeads[chain].crossUnsafe+1],
-			}
-		}
-	}
-	return ChainBlock{}
-}
-
-func GetCrossSafeCandidate(t *testing.T, rc RandomChain) (block ChainBlock) {
-	for _, chain := range rc.chainIDs {
-		if rc.chainHeads[chain].crossSafe < rc.chainHeads[chain].localSafe {
-			return ChainBlock{
-				chain: chain,
-				block: rc.chainBlocks[chain][rc.chainHeads[chain].crossSafe+1],
-			}
-		}
-	}
-	return ChainBlock{}
 }

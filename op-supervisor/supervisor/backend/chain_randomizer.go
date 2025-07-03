@@ -79,6 +79,7 @@ type RandomChain struct {
 	}
 	chainIDs      []eth.ChainID
 	allBlocks     []*ChainBlock
+	cbIndices     map[ChainBlock]int // Lookup for a ChainBlock's index in allBlocks
 	generatedLogs map[ChainBlock][]*types2.Log
 	dependencies  map[ChainBlock][]*ChainBlock
 	chainSources  map[eth.ChainID]*MockProcessorSource
@@ -123,6 +124,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		},
 		chainIDs:      make([]eth.ChainID, 0, p.chainCount),
 		allBlocks:     make([]*ChainBlock, 0, totalLength),
+		cbIndices:     make(map[ChainBlock]int),
 		generatedLogs: make(map[ChainBlock][]*types2.Log),
 		dependencies:  make(map[ChainBlock][]*ChainBlock),
 		chainSources:  make(map[eth.ChainID]*MockProcessorSource),
@@ -223,6 +225,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			res.chainHeads[chainid].crossUnsafe = block.Number
 		}
 
+		res.cbIndices[*cb] = i
 		res.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
 		res.chainBlocks[chainid] = append(res.chainBlocks[chainid], block)
 		prevBlock = block
@@ -247,6 +250,33 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 			addExecutingMessage(&res, execcb, initcb, initiatingLog)
 		}
 	}
+
+	// Add dependencies for candidates
+	candidateDependencyChance := p.dependencyChance
+	crossUnsafeCandidate := GetCrossUnsafeCandidate(res)
+	crossSafeCandidate := GetCrossUnsafeCandidate(res)
+
+	addCandidateDeps := func(candidate *ChainBlock) {
+		if candidate != nil {
+			time := candidate.block.Time
+			index := res.cbIndices[*candidate] - 1
+			sameTimestamps := make([]int, 0)
+			for res.allBlocks[index].block.Time == time {
+				sameTimestamps = append(sameTimestamps, index)
+				index--
+			}
+			for len(sameTimestamps) > 0 && r.Intn(100) < candidateDependencyChance {
+				execIndex := res.cbIndices[*candidate]
+				execcb := res.allBlocks[execIndex]
+				initcb := res.allBlocks[r.Intn(len(sameTimestamps))]
+				initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
+				addExecutingMessage(&res, execcb, initcb, initiatingLog)
+			}
+		}
+	}
+
+	addCandidateDeps(crossUnsafeCandidate)
+	addCandidateDeps(crossSafeCandidate)
 
 	//
 	// Make L1 derivation info
@@ -523,4 +553,28 @@ func (m *MockProcessorSource) BlockRefByNumber(ctx context.Context, num uint64) 
 
 func (m *MockProcessorSource) ExpectBlockRefByNumber(num uint64, ref eth.BlockRef, err error) {
 	m.Mock.On("BlockRefByNumber", num).Return(ref, err)
+}
+
+func GetCrossUnsafeCandidate(rc RandomChain) (block *ChainBlock) {
+	for _, chain := range rc.chainIDs {
+		if rc.chainHeads[chain].crossUnsafe < rc.chainHeads[chain].localUnsafe {
+			return &ChainBlock{
+				chain: chain,
+				block: rc.chainBlocks[chain][rc.chainHeads[chain].crossUnsafe+1],
+			}
+		}
+	}
+	return nil
+}
+
+func GetCrossSafeCandidate(rc RandomChain) (block *ChainBlock) {
+	for _, chain := range rc.chainIDs {
+		if rc.chainHeads[chain].crossSafe < rc.chainHeads[chain].localSafe {
+			return &ChainBlock{
+				chain: chain,
+				block: rc.chainBlocks[chain][rc.chainHeads[chain].crossSafe+1],
+			}
+		}
+	}
+	return nil
 }
