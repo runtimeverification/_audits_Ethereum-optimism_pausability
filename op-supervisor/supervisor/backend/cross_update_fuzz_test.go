@@ -47,8 +47,16 @@ import (
 // 16 - ReplaceBlockEvent
 // 17 - FinalizedL1RequestEvent
 
+type SafetyHeads struct {
+	// These are block numbers on the chain
+	localSafe   types.DerivedIDPair
+	localUnsafe eth.BlockID
+	crossSafe   types.DerivedIDPair
+	crossUnsafe eth.BlockID
+}
+
 type State struct {
-	chainHeads map[eth.ChainID]*ChainHeads
+	chainHeads map[eth.ChainID]*SafetyHeads
 }
 
 func FuzzRandomChains(f *testing.F) {
@@ -183,7 +191,6 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 	})
 }
 
-/*
 func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 	f.Add(int64(63))
@@ -274,6 +281,7 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 	})
 }
 
+/*
 func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 	f.Add(int64(63))
@@ -1055,8 +1063,8 @@ func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.Ch
 	require.NoError(t, err)
 
 	t.Logf("\t- Cross Unsafe head %d <= Local Unsafe head %d", crossUnsafe.Number, localUnsafe.Number)
-	state.chainHeads[chain].crossUnsafe = crossUnsafe.Number
-	state.chainHeads[chain].localUnsafe = localUnsafe.Number
+	state.chainHeads[chain].crossUnsafe = crossUnsafe
+	state.chainHeads[chain].localUnsafe = localUnsafe
 	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number, "Cross Unsafe head: %d is not less or equal than Local Unsafe head: %d", crossUnsafe.Number, localUnsafe.Number)
 }
 
@@ -1065,8 +1073,8 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	localSafe, err := b.LocalSafe(context.Background(), chain)
 	crossSafe, _ := b.CrossSafe(context.Background(), chain)
 
-	state.chainHeads[chain].crossSafe = crossSafe.Derived.Number
-	state.chainHeads[chain].localSafe = localSafe.Derived.Number
+	state.chainHeads[chain].crossSafe = crossSafe
+	state.chainHeads[chain].localSafe = localSafe
 
 	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 	if err == types.ErrAwaitReplacementBlock {
@@ -1076,10 +1084,10 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 }
 
 func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) (state State) {
-	state.chainHeads = make(map[eth.ChainID]*ChainHeads)
+	state.chainHeads = make(map[eth.ChainID]*SafetyHeads)
 	for _, chain := range rc.chainIDs {
 		t.Logf("Chain %d:", chain)
-		state.chainHeads[chain] = &ChainHeads{}
+		state.chainHeads[chain] = &SafetyHeads{}
 
 		CrossUnsafe_LE_LocalUnsafe(t, b, chain, state)
 		CrossSafe_LE_LocalSafe(t, b, chain, state)
@@ -1091,9 +1099,9 @@ func AssertCrossUnsafeHeadUpdate(t *testing.T, rc RandomChain, preState State, p
 	crossUnsafeUpdates := 0
 	chainsToUpdate := len(rc.chainIDs)
 	for _, chain := range rc.chainIDs {
-		preCrossUnsafe := preState.chainHeads[chain].crossUnsafe
-		preLocalUnsafe := preState.chainHeads[chain].localUnsafe
-		posCrossUnsafe := posState.chainHeads[chain].crossUnsafe
+		preCrossUnsafe := preState.chainHeads[chain].crossUnsafe.Number
+		preLocalUnsafe := preState.chainHeads[chain].localUnsafe.Number
+		posCrossUnsafe := posState.chainHeads[chain].crossUnsafe.Number
 		if chain != expectNoUpdate {
 			if preCrossUnsafe < preLocalUnsafe {
 				// Ensure the cross unsafe head has been updated
@@ -1123,23 +1131,30 @@ func AssertCrossSafeHeadUpdate(t *testing.T, rc RandomChain, preState State, pos
 	crossSafeUpdates := 0
 	chainsToUpdate := len(rc.chainIDs)
 	for _, chain := range rc.chainIDs {
-		preCrossSafe := preState.chainHeads[chain].crossSafe
-		preLocalSafe := preState.chainHeads[chain].localSafe
-		posCrossSafe := posState.chainHeads[chain].crossSafe
+		preCrossSafeDerived := preState.chainHeads[chain].crossSafe.Derived.Number
+		preLocalSafeDerived := preState.chainHeads[chain].localSafe.Derived.Number
+		posCrossSafeDerived := posState.chainHeads[chain].crossSafe.Derived.Number
 		if chain != expectNoUpdate {
-			if preCrossSafe < preLocalSafe {
-				if posCrossSafe == preCrossSafe+1 {
+			if preCrossSafeDerived < preLocalSafeDerived {
+				if posCrossSafeDerived == preCrossSafeDerived+1 {
 					crossSafeUpdates++
-					t.Logf("Cross Safe head for chain %d has been updated from %d to %d", chain, preCrossSafe, posCrossSafe)
+					t.Logf("Cross Safe head for chain %d has been updated from %d to %d", chain, preCrossSafeDerived, posCrossSafeDerived)
+				} else if posCrossSafeDerived == preCrossSafeDerived {
+					preCrossSafeSource := preState.chainHeads[chain].crossSafe.Source.Number
+					posCrossSafeSource := posState.chainHeads[chain].crossSafe.Source.Number
+					if preCrossSafeSource < posCrossSafeSource {
+						crossSafeUpdates++
+						t.Logf("Cross Safe head for chain %d has has increased source from %d to %d", chain, preCrossSafeSource, posCrossSafeSource)
+					}
 				}
 			} else {
 				chainsToUpdate--
-				require.Equal(t, posCrossSafe, preCrossSafe)
+				require.Equal(t, posCrossSafeDerived, preCrossSafeDerived)
 				t.Logf("Cross Safe head for chain %d was already equal to Local Safe", chain)
 			}
 		} else {
 			chainsToUpdate--
-			require.Equal(t, posCrossSafe, preCrossSafe, "Cross Safe head unexpectedly updated for chain %d", chain)
+			require.Equal(t, posCrossSafeDerived, preCrossSafeDerived, "Cross Safe head unexpectedly updated for chain %d", chain)
 			t.Logf("Cross Safe head for chain %d was not updated because the candidate was invalid", chain)
 		}
 	}
