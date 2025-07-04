@@ -48,10 +48,10 @@ type ChainBlock struct {
 
 type ChainHeads struct {
 	// These are block numbers on the chain
-	localSafe   uint64 // <= chain length
-	localUnsafe uint64 // <= chain length
-	crossSafe   uint64 // <= localSafe
-	crossUnsafe uint64 // <= localUnsafe
+	localSafe   uint64
+	localUnsafe uint64
+	crossSafe   uint64
+	crossUnsafe uint64
 }
 
 type RandomChainParams struct {
@@ -402,7 +402,7 @@ func InsertMessageWithInvalidIdentifier(r *rand.Rand, res *RandomChain, candidat
 
 func InvalidateBlock(t *testing.T, res *RandomChain, candidate *ChainBlock) {
 	r := res.randomGenerator
-	switch r.Intn(4) {
+	switch r.Intn(5) {
 	case 0:
 		InsertCycle(t, r, res, candidate)
 	case 1:
