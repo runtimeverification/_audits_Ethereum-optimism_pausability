@@ -1135,15 +1135,21 @@ func AssertCrossSafeHeadUpdate(t *testing.T, rc RandomChain, preState State, pos
 		posCrossSafeDerived := posState.chainHeads[chain].crossSafe.Derived.Number
 		if chain != expectNoUpdate {
 			if preCrossSafeDerived < preLocalSafeDerived {
-				if posCrossSafeDerived == preCrossSafeDerived+1 {
+				preCrossSafeSource := preState.chainHeads[chain].crossSafe.Source.Number
+				posCrossSafeSource := posState.chainHeads[chain].crossSafe.Source.Number
+				if preCrossSafeDerived < posCrossSafeDerived {
+					require.Equal(t, posCrossSafeDerived, preCrossSafeDerived+1,
+						"Cross Safe update must be incremental, instead got %d -> %d on chain %d", preCrossSafeDerived, posCrossSafeDerived, chain)
+					require.Equal(t, preCrossSafeSource, posCrossSafeSource,
+						"Cross Safe head unexpectedly updated for chain %d", chain)
 					crossSafeUpdates++
 					t.Logf("Cross Safe head for chain %d has been updated from %d to %d", chain, preCrossSafeDerived, posCrossSafeDerived)
 				} else if posCrossSafeDerived == preCrossSafeDerived {
-					preCrossSafeSource := preState.chainHeads[chain].crossSafe.Source.Number
-					posCrossSafeSource := posState.chainHeads[chain].crossSafe.Source.Number
 					if preCrossSafeSource < posCrossSafeSource {
+						require.Equal(t, posCrossSafeSource, preCrossSafeSource+1,
+							"Cross Safe scope bump should be incremental, instead got %d -> %d on chain %d", preCrossSafeSource, posCrossSafeSource, chain)
 						crossSafeUpdates++
-						t.Logf("Cross Safe head for chain %d has has increased source from %d to %d", chain, preCrossSafeSource, posCrossSafeSource)
+						t.Logf("Cross Safe head for chain %d has increased source from %d to %d", chain, preCrossSafeSource, posCrossSafeSource)
 					}
 				}
 			} else {
