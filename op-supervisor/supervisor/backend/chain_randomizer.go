@@ -248,6 +248,9 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		for r.Intn(100) < p.dependencyChance {
 			execIndex := randomInRange(r, initIndex, totalLength)
 			execcb := res.allBlocks[execIndex]
+			if block.Number == 0 {
+				continue
+			}
 			initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
 			addExecutingMessage(&res, execcb, initcb, initiatingLog)
 		}
@@ -271,6 +274,9 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 				execIndex := res.cbIndices[*candidate]
 				execcb := res.allBlocks[execIndex]
 				initcb := res.allBlocks[execIndex-r.Intn(len(sameTimestamps))]
+				if initcb.block.Number == 0 {
+					continue
+				}
 				initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
 				addExecutingMessage(&res, execcb, initcb, initiatingLog)
 			}
