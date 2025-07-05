@@ -32,6 +32,7 @@ type rewinderDB interface {
 	RewindLocalSafe(eth.ChainID, eth.BlockID) error
 	RewindCrossSafe(eth.ChainID, eth.BlockID) error
 	RewindLogs(chainID eth.ChainID, newHead types.BlockSeal) error
+	ResetCrossUnsafeIfNewerThan(chainID eth.ChainID, number uint64) error
 
 	FindSealedBlock(eth.ChainID, uint64) (types.BlockSeal, error)
 	Finalized(eth.ChainID) (types.BlockSeal, error)
@@ -143,6 +144,10 @@ func (r *Rewinder) handleLocalDerivedEvent(ev superevents.LocalSafeUpdateEvent) 
 		return
 	}
 
+	if err := r.db.ResetCrossUnsafeIfNewerThan(ev.ChainID, target.Number); err != nil {
+		r.log.Error("failed to reset cross-unsafe: %w", err)
+	}
+	r.emitter.Emit(superevents.ChainProcessEvent{ChainID: ev.ChainID, Target: ev.NewLocalSafe.Derived.Number})
 	// Emit event to trigger node reset with new heads
 	r.emitter.Emit(superevents.ChainRewoundEvent{ChainID: ev.ChainID})
 }
