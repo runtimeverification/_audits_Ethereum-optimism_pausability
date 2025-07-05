@@ -423,7 +423,10 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 					Source:  newSource,
 				}
 			} else {
-				hashDerived := testutils.RandomHash(randomChain.randomGenerator)
+				r := randomChain.randomGenerator
+				//localSafe := randomChain.chainBlocks[chainA][localSafetoUpdate-1]
+				hashDerived := testutils.RandomHash(r)
+				source := randomChain.l1Source[localSafeHead.Source.Number]
 				derived = types.DerivedBlockRefPair{
 					Derived: eth.BlockRef{
 						Hash:       hashDerived,
@@ -431,7 +434,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 						ParentHash: localSafeHead.Derived.Hash,
 						Time:       uint64(time.Now().Unix()),
 					},
-					Source: eth.BlockRef{},
+					Source: source, //testutils.NextRandomRef(r, randomChain.l1SourceMap[ChainBlock{chain: chainA, block: localSafe}]),
 				}
 			}
 
