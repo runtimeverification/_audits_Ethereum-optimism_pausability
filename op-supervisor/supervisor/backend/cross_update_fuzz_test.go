@@ -164,6 +164,7 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 		})
 
 		t.Run("Cross-unsafe reaches local-unsafe", func(t *testing.T) {
+			// TODO: Fix
 			t.Skip()
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
@@ -284,7 +285,7 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 
 func FuzzUpdateCrossSafeFails(f *testing.F) {
 
-	f.Add(int64(63))
+	f.Add(int64(1052))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
@@ -610,13 +611,12 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 }
 
-/*
 // FuzzEventsPreserveState tests that various events preserve the state of the backend
 func FuzzEventsPreserveState(f *testing.F) {
 
-	f.Add(int64(30), uint64(8))
+	f.Add(int64(30))
 
-	f.Fuzz(func(t *testing.T, seed int64, target uint64) {
+	f.Fuzz(func(t *testing.T, seed int64) {
 
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
@@ -691,15 +691,13 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("FinalizedL1UpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
-				Event: superevents.FinalizedL1UpdateEvent{
-					FinalizedL1: eth.BlockRef{},
-				},
+				Event:        superevents.FinalizedL1UpdateEvent{},
 				EmitPriority: event.High,
 			})
 
 			require.NoError(t, ex.DrainUntil(
 				func(ev event.Event) bool {
-					return ev == superevents.FinalizedL1UpdateEvent{FinalizedL1: eth.BlockRef{}}
+					return ev == superevents.FinalizedL1UpdateEvent{}
 				}, false))
 			t.Log("FinalizedL1UpdateEvent processed")
 
@@ -788,6 +786,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		})
 
 		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
+			// TODO: provide a meaningfull argument FinalizedL1
 			ex.Enqueue(event.AnnotatedEvent{
 				Event:        superevents.FinalizedL1RequestEvent{},
 				EmitPriority: event.High,
@@ -803,13 +802,14 @@ func FuzzEventsPreserveState(f *testing.F) {
 			AssertInvariants(t, b, randomChain)
 		})
 
+		// TODO: Assert that the state does not change
+
 		err := b.Stop(context.Background())
 		require.NoError(t, err)
 		t.Log("stopped!")
 	})
 
 }
-*/
 
 func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.GlobalSyncExec, b *SupervisorBackend) {
 	logger := testlog.Logger(t, log.LvlInfo)
@@ -859,111 +859,6 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	t.Log("started!")
 
 	return ex, b
-}
-
-func ChainsInitOld(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
-	GenerateReceiptsFromLogs(&randomChain)
-
-	for _, chain := range randomChain.chainIDs {
-		chainHeads := randomChain.chainHeads[chain]
-		localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
-		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
-		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
-
-		t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
-
-		derived := randomChain.chainBlocks[chain][0]
-		source := randomChain.l1SourceMap[ChainBlock{chain, derived}]
-		ex.Enqueue(event.AnnotatedEvent{
-			Event: superevents.AnchorEvent{
-				ChainID: chain,
-				Anchor: types.DerivedBlockRefPair{
-					Derived: *derived,
-					Source:  source,
-				}},
-			EmitPriority: event.High,
-		})
-
-		t.Logf("AnchorEvent for chain %d Emmitted", chain)
-
-		ex.DrainUntil(
-			func(ev event.Event) bool {
-				return ev == superevents.AnchorEvent{
-					ChainID: chain,
-					Anchor: types.DerivedBlockRefPair{
-						Derived: *derived,
-						Source:  source,
-					}}
-			}, false)
-
-		t.Logf("AnchorEvent for chain %d processed", chain)
-
-		for _, block := range randomChain.chainBlocks[chain] {
-			t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
-
-			ex.Enqueue(event.AnnotatedEvent{
-				Event: superevents.ChainProcessEvent{
-					ChainID: chain,
-					Target:  block.Number,
-				},
-				EmitPriority: event.High,
-			})
-			ex.DrainUntil(
-				func(ev event.Event) bool {
-					return ev == superevents.ChainProcessEvent{
-						ChainID: chain,
-						Target:  block.Number}
-				}, false)
-
-			if block.Number <= crossSafe.Number {
-				localSafe := superevents.LocalDerivedEvent{
-					ChainID: chain,
-					Derived: types.DerivedBlockRefPair{
-						Derived: *block,
-						Source:  randomChain.l1SourceMap[ChainBlock{chain, block}],
-					},
-					NodeID: "test-node",
-				}
-				ex.Enqueue(event.AnnotatedEvent{
-					Event:        localSafe,
-					EmitPriority: event.High,
-				})
-				ex.Drain()
-			}
-		}
-	}
-
-	for _, chain := range randomChain.chainIDs {
-		chainHeads := randomChain.chainHeads[chain]
-		localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
-		crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
-
-		for i := crossSafe.Number + 1; i <= localSafe; i++ {
-			block := randomChain.chainBlocks[chain][i]
-
-			localSafe := superevents.LocalDerivedEvent{
-				ChainID: chain,
-				Derived: types.DerivedBlockRefPair{
-					Derived: *block,
-					Source:  randomChain.l1SourceMap[ChainBlock{chain, block}],
-				},
-				NodeID: "test-node",
-			}
-			ex.Enqueue(event.AnnotatedEvent{
-				Event:        localSafe,
-				EmitPriority: event.High,
-			})
-			ex.DrainUntil(
-				func(ev event.Event) bool {
-					return ev == localSafe
-				}, false)
-		}
-		crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-		err := b.chainDBs.UpdateCrossUnsafe(chain, types.BlockSealFromRef(*crossUnsafe))
-		require.NoError(t, err)
-	}
-	t.Log("Chains initialized!")
 }
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
