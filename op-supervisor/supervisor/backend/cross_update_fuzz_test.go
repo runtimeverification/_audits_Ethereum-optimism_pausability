@@ -673,7 +673,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		ChainsInit(t, b, ex, randomChain)
 
 		t.Log("Initial State")
-		AssertInvariants(t, b, randomChain)
+		preState := AssertInvariants(t, b, randomChain)
 
 		t.Run("LocalUnsafeUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
@@ -688,7 +688,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("LocalUnsafeReceivedEvent", func(t *testing.T) {
@@ -704,7 +705,9 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeReceivedEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
+
 		})
 
 		t.Run("CrossUnsafeUpdateEvent", func(t *testing.T) {
@@ -720,7 +723,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("CrossSafeUpdateEvent", func(t *testing.T) {
@@ -736,7 +740,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossSafeUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("FinalizedL1UpdateEvent", func(t *testing.T) {
@@ -752,7 +757,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1UpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("FinalizedL2UpdateEvent", func(t *testing.T) {
@@ -768,7 +774,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL2UpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("InvalidateLocalSafeEvent", func(t *testing.T) {
@@ -784,7 +791,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("InvalidateLocalSafeEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("ChainRewoundEvent", func(t *testing.T) {
@@ -800,7 +808,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("ChainRewoundEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("UpdateLocalSafeFailedEvent", func(t *testing.T) {
@@ -816,7 +825,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("UpdateLocalSafeFailedEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("LocalDerivedOriginUpdateEvent", func(t *testing.T) {
@@ -832,7 +842,8 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalDerivedOriginUpdateEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
@@ -849,10 +860,9 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1RequestEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
-
-		// TODO: Assert that the state does not change
 
 		err := b.Stop(context.Background())
 		require.NoError(t, err)
