@@ -506,8 +506,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 			t.Logf("State after Chain %d Block Number %d invalidation", chainA, crossSafeHeadCandidate)
 			AssertInvariants(t, b, randomChain)
 
-			r := randomChain.randomGenerator
-			newHash := testutils.RandomHash(r)
+			newHash := testutils.RandomHash(randomChain.randomGenerator)
 			replacementBlock := eth.BlockRef{
 				Hash:       newHash,
 				Number:     crossSafeHeadCandidate,
@@ -548,12 +547,11 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 	})
 }
 
-/*
 func FuzzChainProcessEventInvariants(f *testing.F) {
 
-	f.Add(int64(30), uint64(8))
+	f.Add(int64(30))
 
-	f.Fuzz(func(t *testing.T, seed int64, target uint64) {
+	f.Fuzz(func(t *testing.T, seed int64) {
 
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
@@ -561,18 +559,19 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 		chainA := randomChain.chainIDs[0]
 		srcChainA := randomChain.chainSources[chainA]
-		target = target % (randomChain.chainHeads[chainA].localUnsafe + 2)
+		target := randomChain.chainHeads[chainA].localUnsafe + 1
+		// TODO: write another test in which target can be any number
+		// target = target % (randomChain.chainHeads[chainA].localUnsafe + 2)
 
 		t.Run("ChainProcessEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
 			AssertInvariants(t, b, randomChain)
 
-			newHash := make([]byte, 32)
-			rand.Read(newHash)
+			newHash := testutils.RandomHash(randomChain.randomGenerator)
 
 			newLocalUnsafe := eth.BlockRef{
-				Hash:       common.BytesToHash(newHash),
+				Hash:       newHash,
 				Number:     target,
 				ParentHash: randomChain.chainBlocks[chainA][target-1].Hash,
 				Time:       uint64(time.Now().Unix()),
@@ -611,6 +610,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 }
 
+/*
 // FuzzEventsPreserveState tests that various events preserve the state of the backend
 func FuzzEventsPreserveState(f *testing.F) {
 
