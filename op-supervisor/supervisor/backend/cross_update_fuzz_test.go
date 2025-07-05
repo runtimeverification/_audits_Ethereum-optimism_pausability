@@ -330,7 +330,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(int64(57), bool(true)) // Add initial values for fuzzing
+	f.Add(int64(63), bool(true)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
 
@@ -349,10 +349,12 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 			var newLocalSafe types.DerivedBlockSealPair
 			if localSafeHead.Derived.Number < localUnsafeHead.Number {
-				newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number+1]
+				newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
 				newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
+				// TODO split this into 2 different tests
 				if !equalUnsafeChain {
 					hashDerived := testutils.RandomHash(randomChain.randomGenerator)
+					// Ensure the hash is different from the unsafe chain
 					if hashDerived == newBlock.Hash {
 						t.Skip()
 					}
@@ -363,11 +365,11 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 					Source:  newSource,
 				}
 			} else {
-				hashDerived := testutils.RandomHash(randomChain.randomGenerator) // Ensure the hash is different from the unsafe chain
+				hashDerived := testutils.RandomHash(randomChain.randomGenerator)
 				newLocalSafe = types.DerivedBlockSealPair{
 					Derived: types.BlockSealFromRef(eth.BlockRef{
 						Hash:       hashDerived,
-						Number:     localSafeHead.Derived.Number + 1,
+						Number:     localSafeHead.Derived.Number,
 						ParentHash: localSafeHead.Derived.Hash,
 						Time:       uint64(time.Now().Unix()),
 					}),
@@ -394,6 +396,8 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 			t.Log("Final State")
 			AssertInvariants(t, b, randomChain)
+
+			// TODO: assert liveness properties
 		})
 
 		err := b.Stop(context.Background())
@@ -403,29 +407,46 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 }
 
-/*
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
-	f.Add(int64(30), uint64(5))
+	f.Add(int64(30))
 
-	f.Fuzz(func(t *testing.T, seed int64, localSafetoUpdate uint64) {
+	f.Fuzz(func(t *testing.T, seed int64) {
 
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
 		ChainsInit(t, b, ex, randomChain)
 
-		t.Run("LocalDerivedEvent Event", func(t *testing.T) {
+		t.Run("LocalDerivedEvent Event Succeeds", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b, randomChain)
+			preState := AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
-			localSafeHead := randomChain.chainHeads[chainA].localSafe
-			localSafetoUpdate = localSafetoUpdate % (localSafeHead + 3) // Allow it to be greater than the next current local safe head
+			localUnsafeHead := preState.chainHeads[chainA].localUnsafe
+			localSafeHead := preState.chainHeads[chainA].localSafe
+			localSafetoUpdate := localSafeHead.Derived.Number + 1
 
-			derived := types.DerivedBlockRefPair{
-				Derived: *randomChain.chainBlocks[chainA][localSafetoUpdate],
-				Source:  eth.BlockRef{},
+			var derived types.DerivedBlockRefPair
+
+			if localSafetoUpdate <= localUnsafeHead.Number {
+				newBlock := randomChain.chainBlocks[chainA][localSafetoUpdate]
+				newSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}]
+				derived = types.DerivedBlockRefPair{
+					Derived: *newBlock,
+					Source:  newSource,
+				}
+			} else {
+				hashDerived := testutils.RandomHash(randomChain.randomGenerator)
+				derived = types.DerivedBlockRefPair{
+					Derived: eth.BlockRef{
+						Hash:       hashDerived,
+						Number:     localSafeHead.Derived.Number + 1,
+						ParentHash: localSafeHead.Derived.Hash,
+						Time:       uint64(time.Now().Unix()),
+					},
+					Source: eth.BlockRef{},
+				}
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
@@ -449,7 +470,13 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
 			t.Log("Final State")
 			AssertInvariants(t, b, randomChain)
+
+			// TODO: Assert liveness properties
 		})
+
+		// TODO write a test where the loca-safe does not get updated
+		// localSafeToUpdate := rand.Int64N(int64(randomChain.chainHeads[chainA].localUnsafe + 1))
+		// require localSafeToUpdate != randomChain.chainHeads[chainA].localSafe + 1
 
 		err := b.Stop(context.Background())
 		require.NoError(t, err)
@@ -457,6 +484,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 	})
 }
 
+/*
 func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
 	f.Add(int64(30))
