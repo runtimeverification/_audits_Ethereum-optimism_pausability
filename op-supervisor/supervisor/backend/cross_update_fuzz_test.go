@@ -295,7 +295,7 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 				preLocalSafe := preState.chainHeads[chain].localSafe
 				posCrossSafe := posState.chainHeads[chain].crossSafe
 
-				require.Equal(t, posCrossSafe, preLocalSafe, "Cross Safe head for chain %d did not reach Local Safe", chain)
+				require.Equal(t, preLocalSafe, posCrossSafe, "Cross Safe head for chain %d did not reach Local Safe", chain)
 			}
 		})
 
@@ -353,15 +353,52 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(int64(94), bool(true)) // Add initial values for fuzzing
+	f.Add(int64(94)) // Add initial values for fuzzing
 
-	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
+	f.Fuzz(func(t *testing.T, seed int64) {
 
 		randomChain := chainParams.MakeRandomChain(seed)
 		ex, b := ExecutorBackendInit(t, randomChain)
 		ChainsInit(t, b, ex, randomChain)
 
-		t.Run("LocalSafeUpdateEvent Event", func(t *testing.T) {
+		t.Run("LocalSafeUpdateEvent Event - LocalSafe equal to unsafe chain", func(t *testing.T) {
+			// Ensure the invariants hold in the initial state
+			t.Log("Initial State")
+			preState := AssertInvariants(t, b, randomChain)
+
+			chainA := randomChain.chainIDs[0]
+			localSafeHead := preState.chainHeads[chainA].localSafe
+
+			newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
+			newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
+			newLocalSafe := types.DerivedBlockSealPair{
+				Derived: types.BlockSealFromRef(*newBlock),
+				Source:  newSource,
+			}
+
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.LocalSafeUpdateEvent{
+					ChainID:      chainA,
+					NewLocalSafe: newLocalSafe,
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.LocalSafeUpdateEvent{
+						ChainID:      chainA,
+						NewLocalSafe: newLocalSafe,
+					}
+				}, false))
+			t.Log("LocalSafeUpdateEvent processed")
+
+			t.Log("Final State")
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
+		})
+
+		t.Run("LocalSafeUpdateEvent Event - LocalSafe not equal to unsafe chain", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Logf("Initial State with seed %d", seed)
 			preState := AssertInvariants(t, b, randomChain)
@@ -374,19 +411,15 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 				t.Skip()
 			}
 
-			var newLocalSafe types.DerivedBlockSealPair
 			newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
 			newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
-			// TODO split this into 2 different tests
-			if !equalUnsafeChain {
-				hashDerived := testutils.RandomHash(randomChain.randomGenerator)
-				// Ensure the hash is different from the unsafe chain
-				if hashDerived == newBlock.Hash {
-					t.Skip()
-				}
-				newBlock.Hash = hashDerived
+			hashDerived := testutils.RandomHash(randomChain.randomGenerator)
+			// Ensure the hash is different from the unsafe chain
+			if hashDerived == newBlock.Hash {
+				t.Skip()
 			}
-			newLocalSafe = types.DerivedBlockSealPair{
+			newBlock.Hash = hashDerived
+			newLocalSafe := types.DerivedBlockSealPair{
 				Derived: types.BlockSealFromRef(*newBlock),
 				Source:  newSource,
 			}
@@ -409,7 +442,8 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			t.Log("LocalSafeUpdateEvent processed")
 
 			// WARN: We have to add the new local safe to the localUnsafe DB
-			// otherwise the invariant crossUnsafe >= localUnsafe does not hold
+			// otherwise the invariant crossUnsafe <= localUnsafe might not hold
+			// if cross-safe == local-safe in the initial state
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.ChainProcessEvent{
 					ChainID: chainA,
@@ -425,23 +459,17 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 						Target:  newLocalSafe.Derived.Number,
 					}
 				}, false))
-			t.Log("LocalSafeUpdateEvent processed")
+			t.Log("ChainProcessEvent processed")
 
 			t.Log("Final State")
 			posState := AssertInvariants(t, b, randomChain)
-
-			if equalUnsafeChain {
-				AssertStateNotChange(t, randomChain, preState, posState)
-			} else {
-				require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, posState.chainHeads[chainA].localSafe.Derived.Number)
-			}
+			require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, posState.chainHeads[chainA].localSafe.Derived.Number)
 		})
 
 		err := b.Stop(context.Background())
 		require.NoError(t, err)
 		t.Log("stopped!")
 	})
-
 }
 
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
