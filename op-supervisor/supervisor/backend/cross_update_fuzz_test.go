@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -327,10 +328,9 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 	})
 }
 
-/*
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(int64(30), bool(false)) // Add initial values for fuzzing
+	f.Add(int64(57), bool(true)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
 
@@ -340,27 +340,41 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 		t.Run("LocalSafeUpdateEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
-			t.Log("Initial State")
-			AssertInvariants(t, b, randomChain)
+			t.Logf("Initial State with seed %d", seed)
+			preState := AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
-			localSafeHead := randomChain.chainHeads[chainA].localSafe
+			localUnsafeHead := preState.chainHeads[chainA].localUnsafe
+			localSafeHead := preState.chainHeads[chainA].localSafe
 
-			var hashDerived common.Hash
-			if equalUnsafeChain {
-				hashDerived = common.BytesToHash([]byte{0xaa, byte(localSafeHead + 1)})
+			var newLocalSafe types.DerivedBlockSealPair
+			if localSafeHead.Derived.Number < localUnsafeHead.Number {
+				newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number+1]
+				newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
+				if !equalUnsafeChain {
+					hashDerived := testutils.RandomHash(randomChain.randomGenerator)
+					if hashDerived == newBlock.Hash {
+						t.Skip()
+					}
+					newBlock.Hash = hashDerived
+				}
+				newLocalSafe = types.DerivedBlockSealPair{
+					Derived: types.BlockSealFromRef(*newBlock),
+					Source:  newSource,
+				}
 			} else {
-				hashDerived = common.BytesToHash([]byte{0xbb, byte(localSafeHead + 1)}) // Ensure the hash is different from the unsafe chain
+				hashDerived := testutils.RandomHash(randomChain.randomGenerator) // Ensure the hash is different from the unsafe chain
+				newLocalSafe = types.DerivedBlockSealPair{
+					Derived: types.BlockSealFromRef(eth.BlockRef{
+						Hash:       hashDerived,
+						Number:     localSafeHead.Derived.Number + 1,
+						ParentHash: localSafeHead.Derived.Hash,
+						Time:       uint64(time.Now().Unix()),
+					}),
+					Source: types.BlockSeal{},
+				}
 			}
-			newLocalSafe := types.DerivedBlockSealPair{
-				Derived: types.BlockSealFromRef(eth.BlockRef{
-					Hash:       hashDerived,
-					Number:     localSafeHead + 1,
-					ParentHash: common.BytesToHash([]byte{0xaa, byte(localSafeHead)}),
-					Time:       uint64(time.Now().Unix()),
-				}),
-				Source: types.BlockSeal{},
-			}
+
 			ex.Enqueue(event.AnnotatedEvent{
 				Event: superevents.LocalSafeUpdateEvent{
 					ChainID:      chainA,
@@ -389,6 +403,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 }
 
+/*
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
 	f.Add(int64(30), uint64(5))
@@ -1064,7 +1079,7 @@ func CrossUnsafe_LE_LocalUnsafe(t *testing.T, b *SupervisorBackend, chain eth.Ch
 	t.Logf("\t- Cross Unsafe head %d <= Local Unsafe head %d", crossUnsafe.Number, localUnsafe.Number)
 	state.chainHeads[chain].crossUnsafe = crossUnsafe
 	state.chainHeads[chain].localUnsafe = localUnsafe
-	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number, "Cross Unsafe head: %d is not less or equal than Local Unsafe head: %d", crossUnsafe.Number, localUnsafe.Number)
+	require.LessOrEqual(t, crossUnsafe.Number, localUnsafe.Number, "Chain %d: Cross Unsafe head %d is not less or equal than Local Unsafe head %d", chain, crossUnsafe.Number, localUnsafe.Number)
 }
 
 func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainID, state State) {
@@ -1079,7 +1094,7 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	if err == types.ErrAwaitReplacementBlock {
 		return
 	}
-	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Cross Safe head: %d is not less or equal than Local Safe head: %d", crossSafe.Derived.Number, localSafe.Derived.Number)
+	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Chain %d: Cross Safe head %d is not less or equal than Local Safe head %d", chain, crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
 func AssertInvariants(t *testing.T, b *SupervisorBackend, rc RandomChain) (state State) {
