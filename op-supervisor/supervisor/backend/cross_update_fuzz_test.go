@@ -353,7 +353,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(int64(63), bool(false)) // Add initial values for fuzzing
+	f.Add(int64(94), bool(true)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
 
@@ -368,6 +368,11 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 			chainA := randomChain.chainIDs[0]
 			localSafeHead := preState.chainHeads[chainA].localSafe
+
+			// WARN: We assume the first block to be the always equal to the unsafe-chain
+			if localSafeHead.Derived.Number == 0 {
+				t.Skip()
+			}
 
 			var newLocalSafe types.DerivedBlockSealPair
 			newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
@@ -403,10 +408,33 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 				}, false))
 			t.Log("LocalSafeUpdateEvent processed")
 
-			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			// WARN: We have to add the new local safe to the localUnsafe DB
+			// otherwise the invariant crossUnsafe >= localUnsafe does not hold
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.ChainProcessEvent{
+					ChainID: chainA,
+					Target:  newLocalSafe.Derived.Number,
+				},
+				EmitPriority: event.High,
+			})
 
-			// TODO: assert liveness properties
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.ChainProcessEvent{
+						ChainID: chainA,
+						Target:  newLocalSafe.Derived.Number,
+					}
+				}, false))
+			t.Log("LocalSafeUpdateEvent processed")
+
+			t.Log("Final State")
+			posState := AssertInvariants(t, b, randomChain)
+
+			if equalUnsafeChain {
+				AssertStateNotChange(t, randomChain, preState, posState)
+			} else {
+				require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, posState.chainHeads[chainA].localSafe.Derived.Number)
+			}
 		})
 
 		err := b.Stop(context.Background())
@@ -1125,5 +1153,15 @@ func AssertCrossSafeHeadUpdate(t *testing.T, rc RandomChain, preState State, pos
 	if chainsToUpdate > 0 && expectNoUpdate == eth.ChainIDFromUInt64(0) {
 		// At least one chain must be updated
 		require.Greater(t, crossSafeUpdates, 0)
+	}
+}
+
+func AssertStateNotChange(t *testing.T, rc RandomChain, preState State, posState State) {
+	for _, chain := range rc.chainIDs {
+		//preCrossSafe := preState.chainHeads[chain].crossSafe
+		//preLocalSafe := preState.chainHeads[chain].localSafe
+		//posCrossSafe := posState.chainHeads[chain].crossSafe
+		require.Equal(t, preState.chainHeads[chain], posState.chainHeads[chain], "State for chain %d was expected not to change", chain)
+
 	}
 }
