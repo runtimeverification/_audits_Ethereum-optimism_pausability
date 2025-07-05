@@ -264,21 +264,24 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	addCandidateDeps := func(candidate *ChainBlock) {
 		if candidate != nil {
 			time := candidate.block.Time
-			index := res.cbIndices[*candidate] - 1
-			sameTimestamps := make([]int, 0)
+			candidateIndex := res.cbIndices[*candidate]
+			index := candidateIndex - 1
+			// Find earliest block with the same timestamp as the candidate
 			for res.allBlocks[index].block.Time == time {
-				sameTimestamps = append(sameTimestamps, index)
 				index--
 			}
-			for len(sameTimestamps) > 0 && r.Intn(100) < candidateDependencyChance {
-				execIndex := res.cbIndices[*candidate]
-				execcb := res.allBlocks[execIndex]
-				initcb := res.allBlocks[execIndex-r.Intn(len(sameTimestamps))]
-				if initcb.block.Number == 0 {
-					continue
+			// Iterate over this range of blocks and add dependencies between them
+			for i := candidateIndex; index+1 < i; i-- {
+				for r.Intn(100) < candidateDependencyChance {
+					execcb := res.allBlocks[i]
+					dependencyIndex := randomInRange(r, index+1, i)
+					initcb := res.allBlocks[dependencyIndex]
+					if initcb.block.Number == 0 {
+						continue
+					}
+					initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
+					addExecutingMessage(&res, execcb, initcb, initiatingLog)
 				}
-				initiatingLog := addRandomInitiatingMessage(r, &res, initcb)
-				addExecutingMessage(&res, execcb, initcb, initiatingLog)
 			}
 		}
 	}
@@ -515,6 +518,7 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainB
 	t.Logf("Inserting a cycle in candidate (%s, %2d)'s hazard set", candidate.chain, candidate.block.Number)
 
 	candidateHazards := listHazards(t, res, candidate)
+	t.Logf("Size of (%s, %2d)'s hazard set: %d", candidate.chain, candidate.block.Number, len(candidateHazards))
 	cycleStart := candidateHazards[r.Intn(len(candidateHazards))]
 	t.Logf("Picked random hazard set element to start the cycle: (%s, %2d)", cycleStart.chain, cycleStart.block.Number)
 
@@ -525,6 +529,7 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainB
 		subHazards = candidateHazards
 	} else {
 		subHazards = listHazards(t, res, cycleStart)
+		t.Logf("Size of (%s, %2d)'s hazard set: %d", cycleStart.chain, cycleStart.block.Number, len(subHazards))
 	}
 
 	cycleEnd := subHazards[r.Intn(len(subHazards))]
