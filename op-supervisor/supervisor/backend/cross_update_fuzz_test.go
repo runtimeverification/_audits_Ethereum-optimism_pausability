@@ -473,7 +473,6 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 	})
 }
 
-/*
 func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
 	f.Add(int64(30))
@@ -487,21 +486,30 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 		t.Run("ReplaceBlockEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b, randomChain)
+			preState := AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
-			crossSafeHeadCandidate := randomChain.chainHeads[chainA].crossSafe + 1
+			localSafe := preState.chainHeads[chainA].localSafe.Derived.Number
+			crossSafe := preState.chainHeads[chainA].crossSafe.Derived.Number
 
+			if crossSafe == localSafe {
+				t.Skip()
+			}
+			crossSafeHeadCandidate := crossSafe + 1
+			block := randomChain.chainBlocks[chainA][crossSafeHeadCandidate]
 			invalidated := types.DerivedBlockRefPair{
-				Derived: *randomChain.chainBlocks[chainA][crossSafeHeadCandidate],
-				Source:  eth.BlockRef{},
+				Derived: *block,
+				Source:  randomChain.l1SourceMap[ChainBlock{chain: chainA, block: block}],
 			}
 			b.chainDBs.InvalidateLocalSafe(chainA, invalidated)
 
-			newHash := make([]byte, 32)
-			rand.Read(newHash)
+			t.Logf("State after Chain %d Block Number %d invalidation", chainA, crossSafeHeadCandidate)
+			AssertInvariants(t, b, randomChain)
+
+			r := randomChain.randomGenerator
+			newHash := testutils.RandomHash(r)
 			replacementBlock := eth.BlockRef{
-				Hash:       common.BytesToHash(newHash),
+				Hash:       newHash,
 				Number:     crossSafeHeadCandidate,
 				ParentHash: invalidated.Derived.ParentHash,
 				Time:       uint64(time.Now().Unix()),
@@ -540,6 +548,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 	})
 }
 
+/*
 func FuzzChainProcessEventInvariants(f *testing.F) {
 
 	f.Add(int64(30), uint64(8))
@@ -1107,10 +1116,11 @@ func CrossSafe_LE_LocalSafe(t *testing.T, b *SupervisorBackend, chain eth.ChainI
 	state.chainHeads[chain].crossSafe = crossSafe
 	state.chainHeads[chain].localSafe = localSafe
 
-	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 	if err == types.ErrAwaitReplacementBlock {
+		t.Logf("\t- Cross Safe head %d <= Local Safe awaiting replacement block", crossSafe.Derived.Number)
 		return
 	}
+	t.Logf("\t- Cross Safe head %d <= Local Safe head %d", crossSafe.Derived.Number, localSafe.Derived.Number)
 	require.LessOrEqual(t, crossSafe.Derived.Number, localSafe.Derived.Number, "Chain %d: Cross Safe head %d is not less or equal than Local Safe head %d", chain, crossSafe.Derived.Number, localSafe.Derived.Number)
 }
 
