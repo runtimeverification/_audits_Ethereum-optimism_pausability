@@ -330,7 +330,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 
 func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
-	f.Add(int64(63), bool(true)) // Add initial values for fuzzing
+	f.Add(int64(63), bool(false)) // Add initial values for fuzzing
 
 	f.Fuzz(func(t *testing.T, seed int64, equalUnsafeChain bool) {
 
@@ -344,37 +344,23 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			preState := AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
-			localUnsafeHead := preState.chainHeads[chainA].localUnsafe
 			localSafeHead := preState.chainHeads[chainA].localSafe
 
 			var newLocalSafe types.DerivedBlockSealPair
-			if localSafeHead.Derived.Number < localUnsafeHead.Number {
-				newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
-				newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
-				// TODO split this into 2 different tests
-				if !equalUnsafeChain {
-					hashDerived := testutils.RandomHash(randomChain.randomGenerator)
-					// Ensure the hash is different from the unsafe chain
-					if hashDerived == newBlock.Hash {
-						t.Skip()
-					}
-					newBlock.Hash = hashDerived
-				}
-				newLocalSafe = types.DerivedBlockSealPair{
-					Derived: types.BlockSealFromRef(*newBlock),
-					Source:  newSource,
-				}
-			} else {
+			newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
+			newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
+			// TODO split this into 2 different tests
+			if !equalUnsafeChain {
 				hashDerived := testutils.RandomHash(randomChain.randomGenerator)
-				newLocalSafe = types.DerivedBlockSealPair{
-					Derived: types.BlockSealFromRef(eth.BlockRef{
-						Hash:       hashDerived,
-						Number:     localSafeHead.Derived.Number,
-						ParentHash: localSafeHead.Derived.Hash,
-						Time:       uint64(time.Now().Unix()),
-					}),
-					Source: types.BlockSeal{},
+				// Ensure the hash is different from the unsafe chain
+				if hashDerived == newBlock.Hash {
+					t.Skip()
 				}
+				newBlock.Hash = hashDerived
+			}
+			newLocalSafe = types.DerivedBlockSealPair{
+				Derived: types.BlockSealFromRef(*newBlock),
+				Source:  newSource,
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
