@@ -164,8 +164,6 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 		})
 
 		t.Run("Cross-unsafe reaches local-unsafe", func(t *testing.T) {
-			// TODO: Fix
-			t.Skip()
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
 			preState := AssertInvariants(t, b, randomChain)
@@ -244,7 +242,7 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 
-	f.Add(int64(276))
+	f.Add(int64(-832))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 		randomChain := chainParams.MakeRandomChain(seed)
@@ -275,6 +273,30 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 
 			// Check that the state has changed as expected - Liveness property
 			AssertCrossSafeHeadUpdate(t, randomChain, preState, posState, eth.ChainIDFromUInt64(0))
+		})
+
+		t.Run("Cross-Safe reaches Local-Safe", func(t *testing.T) {
+			//TODO: Fix
+			t.Skip()
+			// Ensure the invariants hold in the intiial state
+			t.Log("Initial State")
+			preState := AssertInvariants(t, b, randomChain)
+
+			// Drain the event until it is processed
+			require.NoError(t, ex.Drain())
+			t.Log("All Events processed")
+
+			t.Logf("Final State with Seed %d", seed)
+			// Assert the invariants hold after handling the event - Safety properties
+			posState := AssertInvariants(t, b, randomChain)
+
+			// Check that all cross-unsafe heads got equal to respective local-unsafe heads - Liveness property
+			for _, chain := range randomChain.chainIDs {
+				preLocalSafe := preState.chainHeads[chain].localSafe
+				posCrossSafe := posState.chainHeads[chain].crossSafe
+
+				require.Equal(t, posCrossSafe, preLocalSafe, "Cross Safe head for chain %d did not reach Local Safe", chain)
+			}
 		})
 
 		err := b.Stop(context.Background())
