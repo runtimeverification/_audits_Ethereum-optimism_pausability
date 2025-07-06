@@ -392,6 +392,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			t.Log("LocalSafeUpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -460,7 +461,9 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			t.Log("ChainProcessEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
+			// Liveness property
 			require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, posState.chainHeads[chainA].localSafe.Derived.Number)
 		})
 
@@ -541,8 +544,10 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			t.Log("LocalDerivedEvent processed")
 
 			t.Logf("Final State with seed %d", seed)
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 
+			// Liveness property
 			posLocalSafeHead := posState.chainHeads[chainA].localSafe
 			if preLocalSafeHead.Derived.Number < posLocalSafeHead.Derived.Number {
 				require.Equal(t, localSafetoUpdate, posLocalSafeHead.Derived.Number)
@@ -638,7 +643,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
 func FuzzChainProcessEventInvariants(f *testing.F) {
 
-	f.Add(int64(30))
+	f.Add(int64(28))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 
@@ -649,10 +654,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 		chainA := randomChain.chainIDs[0]
 		srcChainA := randomChain.chainSources[chainA]
 
-		// TODO: write another test in which target can be any number
-		// target = target % (randomChain.chainHeads[chainA].localUnsafe + 2)
-
-		t.Run("ChainProcessEvent Event", func(t *testing.T) {
+		t.Run("ChainProcessEvent Event Succeeds", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
 			preState := AssertInvariants(t, b, randomChain)
@@ -694,6 +696,42 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 			posState := AssertInvariants(t, b, randomChain)
 			// Liveness property
 			require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, target)
+		})
+
+		t.Run("ChainProcessEvent Event Fails", func(t *testing.T) {
+			// Ensure the invariants hold in the initial state
+			t.Logf("Initial State with seed %d", seed)
+			preState := AssertInvariants(t, b, randomChain)
+			chainABlocks := randomChain.chainBlocks[chainA]
+			nextLocalUnsafe := preState.chainHeads[chainA].localUnsafe.Number + 1
+			target := uint64(randomChain.randomGenerator.Int63n(int64(len(chainABlocks))))
+
+			if target == nextLocalUnsafe {
+				//This would be the right target to update the localUnsafe
+				t.Skip()
+			}
+
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.ChainProcessEvent{
+					ChainID: chainA,
+					Target:  target,
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.ChainProcessEvent{
+						ChainID: chainA,
+						Target:  target,
+					}
+				}, false))
+			t.Log("ChainProcessEvent processed")
+
+			t.Log("Final State")
+			// Safety properties
+			posState := AssertInvariants(t, b, randomChain)
+			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
 		err := b.Stop(context.Background())
@@ -912,6 +950,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1RequestEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
