@@ -276,8 +276,6 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 		})
 
 		t.Run("Cross-Safe reaches Local-Safe", func(t *testing.T) {
-			//TODO: Fix
-			t.Skip()
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
 			preState := AssertInvariants(t, b, randomChain)
@@ -650,14 +648,15 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 		chainA := randomChain.chainIDs[0]
 		srcChainA := randomChain.chainSources[chainA]
-		target := randomChain.chainHeads[chainA].localUnsafe + 1
+
 		// TODO: write another test in which target can be any number
 		// target = target % (randomChain.chainHeads[chainA].localUnsafe + 2)
 
 		t.Run("ChainProcessEvent Event", func(t *testing.T) {
 			// Ensure the invariants hold in the initial state
 			t.Log("Initial State")
-			AssertInvariants(t, b, randomChain)
+			preState := AssertInvariants(t, b, randomChain)
+			target := preState.chainHeads[chainA].localUnsafe.Number + 1
 
 			newHash := testutils.RandomHash(randomChain.randomGenerator)
 
@@ -691,9 +690,10 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 			t.Log("ChainProcessEvent processed")
 
 			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
-
-			// TODO: Liveness properties
+			// Safety properties
+			posState := AssertInvariants(t, b, randomChain)
+			// Liveness property
+			require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, target)
 		})
 
 		err := b.Stop(context.Background())
@@ -730,6 +730,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -747,6 +748,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalUnsafeReceivedEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 
@@ -765,6 +767,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossUnsafeUpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -782,6 +785,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("CrossSafeUpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -799,6 +803,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL1UpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -816,6 +821,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("FinalizedL2UpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -833,6 +839,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("InvalidateLocalSafeEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -850,6 +857,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("ChainRewoundEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -867,6 +875,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("UpdateLocalSafeFailedEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
@@ -884,6 +893,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 			t.Log("LocalDerivedOriginUpdateEvent processed")
 
 			t.Log("Final State")
+			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
