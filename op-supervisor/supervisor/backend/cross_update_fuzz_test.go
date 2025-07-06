@@ -488,32 +488,38 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			preState := AssertInvariants(t, b, randomChain)
 
 			chainA := randomChain.chainIDs[0]
-			localUnsafeHead := preState.chainHeads[chainA].localUnsafe
-			localSafeHead := preState.chainHeads[chainA].localSafe
-			localSafetoUpdate := localSafeHead.Derived.Number + 1
+			chainLength := len(randomChain.chainBlocks[chainA])
+			preLocalSafeHead := preState.chainHeads[chainA].localSafe
+			localSafetoUpdate := preLocalSafeHead.Derived.Number + 1
 
 			var derived types.DerivedBlockRefPair
 
-			if localSafetoUpdate <= localUnsafeHead.Number {
-				newBlock := randomChain.chainBlocks[chainA][localSafetoUpdate]
-				newSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}]
-				derived = types.DerivedBlockRefPair{
-					Derived: *newBlock,
-					Source:  newSource,
+			if localSafetoUpdate < uint64(chainLength) {
+				nextSafeBlock := randomChain.chainBlocks[chainA][localSafetoUpdate]
+				nextSafeBlockSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: nextSafeBlock}]
+				if preLocalSafeHead.Source.Number < nextSafeBlockSource.Number {
+					derived = types.DerivedBlockRefPair{
+						Derived: *randomChain.chainBlocks[chainA][preLocalSafeHead.Derived.Number],
+						Source:  randomChain.l1Source[preLocalSafeHead.Source.Number+1],
+					}
+				} else {
+					derived = types.DerivedBlockRefPair{
+						Derived: *nextSafeBlock,
+						Source:  nextSafeBlockSource,
+					}
 				}
 			} else {
 				r := randomChain.randomGenerator
-				//localSafe := randomChain.chainBlocks[chainA][localSafetoUpdate-1]
 				hashDerived := testutils.RandomHash(r)
-				source := randomChain.l1Source[localSafeHead.Source.Number]
+				source := randomChain.l1Source[preLocalSafeHead.Source.Number]
 				derived = types.DerivedBlockRefPair{
 					Derived: eth.BlockRef{
 						Hash:       hashDerived,
-						Number:     localSafeHead.Derived.Number + 1,
-						ParentHash: localSafeHead.Derived.Hash,
+						Number:     localSafetoUpdate,
+						ParentHash: preLocalSafeHead.Derived.Hash,
 						Time:       uint64(time.Now().Unix()),
 					},
-					Source: source, //testutils.NextRandomRef(r, randomChain.l1SourceMap[ChainBlock{chain: chainA, block: localSafe}]),
+					Source: source,
 				}
 			}
 
@@ -536,10 +542,16 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 				}, false))
 			t.Log("LocalDerivedEvent processed")
 
-			t.Log("Final State")
-			AssertInvariants(t, b, randomChain)
+			t.Logf("Final State with seed %d", seed)
+			posState := AssertInvariants(t, b, randomChain)
 
-			// TODO: Assert liveness properties
+			posLocalSafeHead := posState.chainHeads[chainA].localSafe
+			if preLocalSafeHead.Derived.Number < posLocalSafeHead.Derived.Number {
+				require.Equal(t, localSafetoUpdate, posLocalSafeHead.Derived.Number)
+			} else {
+				require.Equal(t, preLocalSafeHead.Derived.Number, posLocalSafeHead.Derived.Number)
+				require.Equal(t, posLocalSafeHead.Source.Number, preLocalSafeHead.Source.Number+1)
+			}
 		})
 
 		// TODO write a test where the loca-safe does not get updated
@@ -680,6 +692,8 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 			t.Log("Final State")
 			AssertInvariants(t, b, randomChain)
+
+			// TODO: Liveness properties
 		})
 
 		err := b.Stop(context.Background())
