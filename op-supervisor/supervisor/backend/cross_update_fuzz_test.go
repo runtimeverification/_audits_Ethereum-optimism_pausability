@@ -475,7 +475,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 
 func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
-	f.Add(int64(30))
+	f.Add(int64(-383))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 
@@ -557,9 +557,75 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			}
 		})
 
-		// TODO write a test where the loca-safe does not get updated
-		// localSafeToUpdate := rand.Int64N(int64(randomChain.chainHeads[chainA].localUnsafe + 1))
-		// require localSafeToUpdate != randomChain.chainHeads[chainA].localSafe + 1
+		t.Run("LocalDerivedEvent Event Fails", func(t *testing.T) {
+			// Ensure the invariants hold in the initial state
+			t.Log("Initial State")
+			preState := AssertInvariants(t, b, randomChain)
+
+			chainA := randomChain.chainIDs[0]
+			chainLength := len(randomChain.chainBlocks[chainA])
+			preLocalSafeHead := preState.chainHeads[chainA].localSafe
+			nextLocalSafe := preLocalSafeHead.Derived.Number + 1
+
+			localSafeToUpdate := uint64(randomChain.randomGenerator.Int63n(int64(chainLength + 1)))
+			//rand.Int64N(int64(randomChain.chainHeads[chainA].localUnsafe + 1))
+			//if localSafeToUpdate == nextLocalSafe {
+			//	// This would be the right target to update the local safe
+			//	t.Skip()
+			//}
+
+			var derived types.DerivedBlockRefPair
+
+			if localSafeToUpdate < uint64(chainLength) {
+				nextSafeBlock := randomChain.chainBlocks[chainA][localSafeToUpdate]
+				nextSafeBlockSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: nextSafeBlock}]
+				if localSafeToUpdate == nextLocalSafe && preLocalSafeHead.Source.Number == nextSafeBlockSource.Number {
+					t.Skip("Local safe to update is the same as next safe block, skipping")
+				}
+				derived = types.DerivedBlockRefPair{
+					Derived: *nextSafeBlock,
+					Source:  nextSafeBlockSource,
+				}
+			} else {
+				r := randomChain.randomGenerator
+				hashDerived := testutils.RandomHash(r)
+				source := randomChain.l1Source[preLocalSafeHead.Source.Number+1]
+				derived = types.DerivedBlockRefPair{
+					Derived: eth.BlockRef{
+						Hash:       hashDerived,
+						Number:     localSafeToUpdate,
+						ParentHash: preLocalSafeHead.Derived.Hash,
+						Time:       uint64(time.Now().Unix()),
+					},
+					Source: source,
+				}
+			}
+
+			ex.Enqueue(event.AnnotatedEvent{
+				Event: superevents.LocalDerivedEvent{
+					ChainID: chainA,
+					Derived: derived,
+					NodeID:  "test-node",
+				},
+				EmitPriority: event.High,
+			})
+
+			require.NoError(t, ex.DrainUntil(
+				func(ev event.Event) bool {
+					return ev == superevents.LocalDerivedEvent{
+						ChainID: chainA,
+						Derived: derived,
+						NodeID:  "test-node",
+					}
+				}, false))
+			t.Log("LocalDerivedEvent processed")
+
+			t.Logf("Final State with seed %d", seed)
+			// Safety properties
+			posState := AssertInvariants(t, b, randomChain)
+
+			AssertStateNotChange(t, randomChain, preState, posState)
+		})
 
 		err := b.Stop(context.Background())
 		require.NoError(t, err)
@@ -937,7 +1003,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		})
 
 		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
-			// TODO: provide a meaningfull argument FinalizedL1
+			// Handling this event changes the finalized database which is not part of the invariants
 			ex.Enqueue(event.AnnotatedEvent{
 				Event:        superevents.FinalizedL1RequestEvent{},
 				EmitPriority: event.High,
