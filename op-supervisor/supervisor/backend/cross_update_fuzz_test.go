@@ -60,53 +60,6 @@ type State struct {
 	chainHeads map[eth.ChainID]*SafetyHeads
 }
 
-func FuzzRandomChains(f *testing.F) {
-	params := RandomChainParams{
-		chainCount: 3,
-		minLength:  10,
-		maxLength:  30,
-
-		sameTimestampFrequency: 80,
-		dependencyChance:       50,
-	}
-	f.Add(int64(30))
-
-	f.Fuzz(func(t *testing.T, seed int64) {
-		randomChain := params.MakeRandomChain(seed)
-
-		//for _, cb := range randomChain.allBlocks {
-		//	t.Logf("    %s, %2d, %d", cb.chain, cb.block.Number, cb.block.Time)
-		//}
-
-		for _, chain := range randomChain.chainIDs {
-			chainHeads := randomChain.chainHeads[chain]
-			localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
-			crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-			localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
-			crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
-
-			t.Logf("\nChain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
-
-			for _, block := range randomChain.chainBlocks[chain] {
-				t.Logf("Chain %d block %d: %s\t Timestamp:%d", chain, block.Number, block.Hash.Hex(), block.Time)
-				source := randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}]
-				t.Logf("Source %d", source.Number)
-			}
-		}
-
-		//for exec, inits := range randomChain.dependencies {
-		//	for _, init := range inits {
-		//		t.Logf("(%s, %2d) <- (%s, %2d)", init.chain, init.block.Number, exec.chain, exec.block.Number)
-		//	}
-		//}
-		//for cb, logs := range randomChain.generatedLogs {
-		//	chain := cb.chain
-		//	block := cb.block
-		//	t.Logf("Generating receipt for (%s, %2d, %s) with %d logs", chain, block.Number, block.Hash, len(logs))
-		//}
-	})
-}
-
 var chainParams = RandomChainParams{
 	chainCount: 3,
 	minLength:  10,
@@ -127,16 +80,6 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
 		t.Run("UpdateCrossUnsafeRequestEvent Success", func(t *testing.T) {
 			ChainsInit(t, b, ex, randomChain)
-
-			for _, chain := range randomChain.chainIDs {
-				chainHeads := randomChain.chainHeads[chain]
-				localUnsafe := randomChain.chainBlocks[chain][len(randomChain.chainBlocks[chain])-1].Number
-				crossUnsafe := randomChain.chainBlocks[chain][chainHeads.crossUnsafe]
-				localSafe := randomChain.chainBlocks[chain][chainHeads.localSafe].Number
-				crossSafe := randomChain.chainBlocks[chain][chainHeads.crossSafe]
-
-				t.Logf("Chain %d LocalUnsafe: %d CrossUnsafe: %d LocalSafe: %d CrossSafe: %d", chain, localUnsafe, crossUnsafe.Number, localSafe, crossSafe.Number)
-			}
 
 			// Ensure the invariants hold in the intiial state
 			t.Log("Initial State")
@@ -568,12 +511,6 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			nextLocalSafe := preLocalSafeHead.Derived.Number + 1
 
 			localSafeToUpdate := uint64(randomChain.randomGenerator.Int63n(int64(chainLength + 1)))
-			//rand.Int64N(int64(randomChain.chainHeads[chainA].localUnsafe + 1))
-			//if localSafeToUpdate == nextLocalSafe {
-			//	// This would be the right target to update the local safe
-			//	t.Skip()
-			//}
-
 			var derived types.DerivedBlockRefPair
 
 			if localSafeToUpdate < uint64(chainLength) {
@@ -623,7 +560,6 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			t.Logf("Final State with seed %d", seed)
 			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
-
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
@@ -635,7 +571,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 
 func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
-	f.Add(int64(30))
+	f.Add(int64(536))
 
 	f.Fuzz(func(t *testing.T, seed int64) {
 
@@ -650,26 +586,31 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 
 			chainA := randomChain.chainIDs[0]
 			localSafe := preState.chainHeads[chainA].localSafe.Derived.Number
-			crossSafe := preState.chainHeads[chainA].crossSafe.Derived.Number
-
-			if crossSafe == localSafe {
+			crossSafe := preState.chainHeads[chainA].crossSafe
+			genesisSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: randomChain.chainBlocks[chainA][0]}]
+			if crossSafe.Derived.Number == localSafe || crossSafe.Source.Number == genesisSource.Number {
 				t.Skip()
 			}
-			crossSafeHeadCandidate := crossSafe + 1
+			crossSafeHeadCandidate := crossSafe.Derived.Number + 1
 			block := randomChain.chainBlocks[chainA][crossSafeHeadCandidate]
+			source := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: block}]
+
 			invalidated := types.DerivedBlockRefPair{
 				Derived: *block,
-				Source:  randomChain.l1SourceMap[ChainBlock{chain: chainA, block: block}],
+				Source:  source,
 			}
 			b.chainDBs.InvalidateLocalSafe(chainA, invalidated)
 
 			t.Logf("State after Chain %d Block Number %d invalidation", chainA, crossSafeHeadCandidate)
 			AssertInvariants(t, b, randomChain)
 
+			_, err := b.LocalSafe(context.Background(), chainA)
+			require.Equal(t, err, types.ErrAwaitReplacementBlock)
+
 			newHash := testutils.RandomHash(randomChain.randomGenerator)
 			replacementBlock := eth.BlockRef{
 				Hash:       newHash,
-				Number:     crossSafeHeadCandidate,
+				Number:     invalidated.Derived.Number,
 				ParentHash: invalidated.Derived.ParentHash,
 				Time:       uint64(time.Now().Unix()),
 			}
@@ -678,7 +619,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 					ChainID: chainA,
 					Replacement: types.BlockReplacement{
 						Replacement: replacementBlock,
-						Invalidated: invalidated.Derived.Hash,
+						Invalidated: block.Hash,
 					},
 				},
 				EmitPriority: event.High,
@@ -690,15 +631,19 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 						ChainID: chainA,
 						Replacement: types.BlockReplacement{
 							Replacement: replacementBlock,
-							Invalidated: invalidated.Derived.Hash,
+							Invalidated: block.Hash,
 						},
 					}
 				}, false))
 
 			t.Log("ReplaceBlockEvent processed")
 
-			t.Log("Final State")
+			t.Logf("Final State with seed %d", seed)
 			AssertInvariants(t, b, randomChain)
+
+			newLocalSafe, _ := b.LocalSafe(context.Background(), chainA)
+			require.Equal(t, crossSafeHeadCandidate, newLocalSafe.Derived.Number)
+			require.Equal(t, newLocalSafe.Derived.Hash, newHash)
 		})
 
 		err := b.Stop(context.Background())
@@ -1325,10 +1270,9 @@ func AssertCrossSafeHeadUpdate(t *testing.T, rc RandomChain, preState State, pos
 
 func AssertStateNotChange(t *testing.T, rc RandomChain, preState State, posState State) {
 	for _, chain := range rc.chainIDs {
-		//preCrossSafe := preState.chainHeads[chain].crossSafe
-		//preLocalSafe := preState.chainHeads[chain].localSafe
-		//posCrossSafe := posState.chainHeads[chain].crossSafe
-		require.Equal(t, preState.chainHeads[chain], posState.chainHeads[chain], "State for chain %d was expected not to change", chain)
-
+		require.Equal(t, preState.chainHeads[chain].localUnsafe, posState.chainHeads[chain].localUnsafe, "Local Unsafe head for chain %d was expected not to change", chain)
+		require.Equal(t, preState.chainHeads[chain].crossUnsafe, posState.chainHeads[chain].crossUnsafe, "Cross Unsafe head for chain %d was expected not to change", chain)
+		require.Equal(t, preState.chainHeads[chain].localSafe, posState.chainHeads[chain].localSafe, "Local Safe head for chain %d was expected not to change", chain)
+		require.Equal(t, preState.chainHeads[chain].crossSafe, posState.chainHeads[chain].crossSafe, "Cross Safe head for chain %d was expected not to change", chain)
 	}
 }
