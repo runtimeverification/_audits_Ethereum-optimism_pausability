@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
-func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log *types2.Log) *types2.Log {
+func ExecMsgForLog(chain eth.ChainID, block eth.L2BlockRef, log *types2.Log) *types2.Log {
 	msg := types.Message{
 		Identifier: types.Identifier{
 			Origin:      log.Address,
@@ -39,7 +39,7 @@ func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log *types2.Log) *type
 
 type ChainBlock struct {
 	chain eth.ChainID
-	block *eth.BlockRef
+	block *eth.L2BlockRef
 }
 
 type ChainHeads struct {
@@ -79,13 +79,13 @@ type RandomChain struct {
 	generatedLogs map[ChainBlock][]*types2.Log
 	dependencies  map[ChainBlock][]*ChainBlock
 	chainSources  map[eth.ChainID]*MockProcessorSource
-	chainBlocks   map[eth.ChainID][]*eth.BlockRef
+	chainBlocks   map[eth.ChainID][]*eth.L2BlockRef
 	chainHeads    map[eth.ChainID]*ChainHeads
 	l1SourceMap   map[ChainBlock]eth.BlockRef
 	l1Source      map[uint64]eth.BlockRef
 }
 
-func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.BlockRef, heads ChainHeads) {
+func (rc *RandomChain) ChainInfo(chainid eth.ChainID) (blocks []*eth.L2BlockRef, heads ChainHeads) {
 	blocks = rc.chainBlocks[chainid]
 	heads = *rc.chainHeads[chainid]
 	return blocks, heads
@@ -125,7 +125,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		generatedLogs: make(map[ChainBlock][]*types2.Log),
 		dependencies:  make(map[ChainBlock][]*ChainBlock),
 		chainSources:  make(map[eth.ChainID]*MockProcessorSource),
-		chainBlocks:   make(map[eth.ChainID][]*eth.BlockRef),
+		chainBlocks:   make(map[eth.ChainID][]*eth.L2BlockRef),
 		chainHeads:    make(map[eth.ChainID]*ChainHeads),
 		l1SourceMap:   make(map[ChainBlock]eth.BlockRef),
 		l1Source:      make(map[uint64]eth.BlockRef),
@@ -133,7 +133,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 
 	for i := range p.chainCount {
 		chain := eth.ChainIDFromUInt64(testChainIDOffset + uint64(i))
-		res.chainBlocks[chain] = make([]*eth.BlockRef, 0)
+		res.chainBlocks[chain] = make([]*eth.L2BlockRef, 0)
 		res.chainSources[chain] = &MockProcessorSource{}
 		res.chainHeads[chain] = &ChainHeads{}
 		res.chainIDs = append(res.chainIDs, chain)
@@ -149,17 +149,17 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		allBlocks := res.allBlocks
 		if i == 0 {
 			// First block has a timestamp far in the past, already expired (used in InsertDependencyToExpiredMessage)
-			randomBlock := testutils.RandomBlockRef(r)
+			randomBlock := testutils.RandomL2BlockRef(r)
 			randomBlock.Time = 0
 			newBlock = &ChainBlock{chainUninit, &randomBlock}
 		} else if i == 1 {
 			// Set the initial timestamp so that the block at index 0 is already expired
-			randomBlock := testutils.NextRandomRef(r, *allBlocks[0].block)
+			randomBlock := testutils.NextRandomL2Ref(r, 100, *allBlocks[0].block, eth.BlockID{})
 			randomBlock.Time = params.MessageExpiryTimeSecondsInterop + 1
 			newBlock = &ChainBlock{chainUninit, &randomBlock}
 		} else {
 			// Use NextRandomRef for timestamp coherence.
-			randomBlock := testutils.NextRandomRef(r, *allBlocks[len(allBlocks)-1].block)
+			randomBlock := testutils.NextRandomL2Ref(r, 100, *allBlocks[len(allBlocks)-1].block, eth.BlockID{})
 
 			// Repeat timestamps with some probability, with two caveats:
 			// - Can only have one block per chain with the same timestamp,
@@ -188,7 +188,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 	}
 
 	nextChain := 0
-	var prevBlock *eth.BlockRef
+	var prevBlock *eth.L2BlockRef
 	for i, cb := range res.allBlocks {
 		block := cb.block
 		if i == 0 || prevBlock.Time != block.Time {
@@ -224,7 +224,7 @@ func (p *RandomChainParams) MakeRandomChain(seed int64) (res RandomChain) {
 		}
 
 		res.cbIndices[*cb] = i
-		res.chainSources[chainid].ExpectBlockRefByNumber(block.Number, *block, nil)
+		res.chainSources[chainid].ExpectL2BlockRefByNumber(block.Number, *block, nil)
 		res.chainBlocks[chainid] = append(res.chainBlocks[chainid], block)
 		prevBlock = block
 	}
@@ -357,7 +357,7 @@ func randomInRange(r *rand.Rand, lowerIncluding int, upperExcluding int) int {
 	return r.Intn(upperExcluding-lowerIncluding) + lowerIncluding
 }
 
-func InvalidExecMsgForLog(r *rand.Rand, res *RandomChain, chain eth.ChainID, block eth.BlockRef, log *types2.Log) *types2.Log {
+func InvalidExecMsgForLog(r *rand.Rand, res *RandomChain, chain eth.ChainID, block eth.L2BlockRef, log *types2.Log) *types2.Log {
 	msg := types.Message{
 		Identifier: types.Identifier{
 			Origin:      log.Address,
