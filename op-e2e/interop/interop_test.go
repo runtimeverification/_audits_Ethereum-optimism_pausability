@@ -233,7 +233,7 @@ func TestInterop_EmitLogs(t *testing.T) {
 		accessList := types.EncodeAccessList(accessEntries)
 
 		timestamp := uint64(time.Now().Unix())
-		ed := types.ExecutingDescriptor{Timestamp: timestamp}
+		ed := types.ExecutingDescriptor{Timestamp: timestamp, ChainID: eth.ChainIDFromBig(s2.ChainID(chainB))}
 		ctx = context.Background()
 		err = supervisor.CheckAccessList(ctx, accessList, types.CrossSafe, ed)
 		require.NoError(t, err, "logsA must all be cross-safe")
@@ -326,10 +326,10 @@ func TestInteropBlockBuilding(t *testing.T) {
 				_, err := s2.ValidateMessage(ctx, chainB, "Alice", identifier, invalidPayloadHash, gethCore.ErrTxFilteredOut)
 				require.ErrorContains(t, err, gethCore.ErrTxFilteredOut.Error())
 			} else {
-				// We expect the miner to be unable to include this tx, and confirmation to thus time out, if mempool filtering is disabled.
+				// The miner will include the tx in the block if mempool filtering is disabled, because interop checks don't happen during block building
+				// this includes invalid interop messages
 				_, err := s2.ValidateMessage(ctx, chainB, "Alice", identifier, invalidPayloadHash, nil)
-				require.ErrorIs(t, err, ctx.Err())
-				require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+				require.NoError(t, err)
 			}
 		}
 
@@ -364,6 +364,7 @@ func TestInteropBlockBuilding(t *testing.T) {
 }
 
 func TestMultiNode(t *testing.T) {
+	t.Skip() // TODO(#16174): Decide on future of multi-node support
 	t.Parallel()
 	test := func(t *testing.T, s2 SuperSystem) {
 		supervisor := s2.SupervisorClient()

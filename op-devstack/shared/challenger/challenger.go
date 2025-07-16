@@ -24,6 +24,7 @@ const (
 	MTCannonVariant     PrestateVariant = "mt64"
 	MTCannonNextVariant PrestateVariant = "mt64Next"
 	InteropVariant      PrestateVariant = "interop"
+	InteropVariantNext  PrestateVariant = "interopNext"
 )
 
 type Option func(cfg *config.Config) error
@@ -100,31 +101,37 @@ func WithFactoryAddress(addr common.Address) Option {
 	}
 }
 
-func WithCannon(rollupCfgs []*rollup.Config, l2Geneses []*core.Genesis, prestateVariant PrestateVariant) Option {
+func WithCannonConfig(rollupCfgs []*rollup.Config, l2Geneses []*core.Genesis, prestateVariant PrestateVariant) Option {
+	return func(c *config.Config) error {
+		return applyCannonConfig(c, rollupCfgs, l2Geneses, prestateVariant)
+	}
+}
+
+func WithCannonTraceType() Option {
 	return func(c *config.Config) error {
 		c.TraceTypes = append(c.TraceTypes, types.TraceTypeCannon)
-		return applyCannonConfig(c, rollupCfgs, l2Geneses, prestateVariant)
+		return nil
 	}
 }
 
-func WithPermissioned(rollupCfgs []*rollup.Config, l2Geneses []*core.Genesis, prestateVariant PrestateVariant) Option {
+func WithPermissionedTraceType() Option {
 	return func(c *config.Config) error {
 		c.TraceTypes = append(c.TraceTypes, types.TraceTypePermissioned)
-		return applyCannonConfig(c, rollupCfgs, l2Geneses, prestateVariant)
+		return nil
 	}
 }
 
-func WithSuperCannon(rollupCfgs []*rollup.Config, l2Geneses []*core.Genesis, prestateVariant PrestateVariant) Option {
+func WithSuperCannonTraceType() Option {
 	return func(c *config.Config) error {
 		c.TraceTypes = append(c.TraceTypes, types.TraceTypeSuperCannon)
-		return applyCannonConfig(c, rollupCfgs, l2Geneses, prestateVariant)
+		return nil
 	}
 }
 
-func WithSuperPermissioned(rollupCfgs []*rollup.Config, l2Geneses []*core.Genesis, prestateVariant PrestateVariant) Option {
+func WithSuperPermissionedTraceType() Option {
 	return func(c *config.Config) error {
 		c.TraceTypes = append(c.TraceTypes, types.TraceTypeSuperPermissioned)
-		return applyCannonConfig(c, rollupCfgs, l2Geneses, prestateVariant)
+		return nil
 	}
 }
 
@@ -179,19 +186,19 @@ func applyCommonChallengerOpts(cfg *config.Config, options ...Option) error {
 	if cfg.Cannon.VmBin != "" {
 		_, err := os.Stat(cfg.Cannon.VmBin)
 		if err != nil {
-			return errors.New("cannon should be built. Make sure you've run make cannon-prestate")
+			return errors.New("cannon should be built. Make sure you've run make cannon-prestates")
 		}
 	}
 	if cfg.Cannon.Server != "" {
 		_, err := os.Stat(cfg.Cannon.Server)
 		if err != nil {
-			return errors.New("op-program should be built. Make sure you've run make cannon-prestate")
+			return errors.New("op-program should be built. Make sure you've run make cannon-prestates")
 		}
 	}
 	if cfg.CannonAbsolutePreState != "" {
 		_, err := os.Stat(cfg.CannonAbsolutePreState)
 		if err != nil {
-			return errors.New("cannon pre-state should be built. Make sure you've run make cannon-prestate")
+			return errors.New("cannon pre-state should be built. Make sure you've run make cannon-prestates")
 		}
 	}
 

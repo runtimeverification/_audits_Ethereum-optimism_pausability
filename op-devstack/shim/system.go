@@ -1,6 +1,8 @@
 package shim
 
 import (
+	"time"
+
 	"github.com/ethereum-optimism/optimism/op-devstack/devtest"
 	"github.com/ethereum-optimism/optimism/op-devstack/stack"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -16,6 +18,9 @@ type SystemConfig struct {
 type presetSystem struct {
 	commonImpl
 
+	// timeTravelClock is the clock used to control time. nil if time travel is not enabled
+	timeTravelClock stack.TimeTravelClock
+
 	superchains locks.RWMap[stack.SuperchainID, stack.Superchain]
 	clusters    locks.RWMap[stack.ClusterID, stack.Cluster]
 
@@ -28,7 +33,7 @@ type presetSystem struct {
 	networks locks.RWMap[eth.ChainID, stack.Network]
 
 	supervisors locks.RWMap[stack.SupervisorID, stack.Supervisor]
-	sequencers  locks.RWMap[stack.SequencerID, stack.Sequencer]
+	sequencers  locks.RWMap[stack.TestSequencerID, stack.TestSequencer]
 }
 
 var _ stack.ExtensibleSystem = (*presetSystem)(nil)
@@ -105,13 +110,13 @@ func (p *presetSystem) AddSupervisor(v stack.Supervisor) {
 	p.require().True(p.supervisors.SetIfMissing(v.ID(), v), "supervisor %s must not already exist", v.ID())
 }
 
-func (p *presetSystem) Sequencer(m stack.SequencerMatcher) stack.Sequencer {
-	v, ok := findMatch(m, p.sequencers.Get, p.Sequencers)
+func (p *presetSystem) TestSequencer(m stack.TestSequencerMatcher) stack.TestSequencer {
+	v, ok := findMatch(m, p.sequencers.Get, p.TestSequencers)
 	p.require().True(ok, "must find sequencer %s", m)
 	return v
 }
 
-func (p *presetSystem) AddSequencer(v stack.Sequencer) {
+func (p *presetSystem) AddTestSequencer(v stack.TestSequencer) {
 	p.require().True(p.sequencers.SetIfMissing(v.ID(), v), "sequencer %s must not already exist", v.ID())
 }
 
@@ -155,6 +160,19 @@ func (p *presetSystem) Supervisors() []stack.Supervisor {
 	return stack.SortSupervisors(p.supervisors.Values())
 }
 
-func (p *presetSystem) Sequencers() []stack.Sequencer {
-	return stack.SortSequencers(p.sequencers.Values())
+func (p *presetSystem) TestSequencers() []stack.TestSequencer {
+	return stack.SortTestSequencers(p.sequencers.Values())
+}
+
+func (p *presetSystem) SetTimeTravelClock(cl stack.TimeTravelClock) {
+	p.timeTravelClock = cl
+}
+
+func (p *presetSystem) TimeTravelEnabled() bool {
+	return p.timeTravelClock != nil
+}
+
+func (p *presetSystem) AdvanceTime(amount time.Duration) {
+	p.require().True(p.TimeTravelEnabled(), "Attempting to advance time when time travel is not enabled")
+	p.timeTravelClock.AdvanceTime(amount)
 }

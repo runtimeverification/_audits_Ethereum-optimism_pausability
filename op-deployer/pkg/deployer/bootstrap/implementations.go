@@ -43,7 +43,7 @@ type ImplementationsConfig struct {
 	ProtocolVersionsProxy           common.Address     `cli:"protocol-versions-proxy"`
 	UpgradeController               common.Address     `cli:"upgrade-controller"`
 	SuperchainProxyAdmin            common.Address     `cli:"superchain-proxy-admin"`
-	UseInterop                      bool               `cli:"use-interop"`
+	Challenger                      common.Address     `cli:"challenger"`
 	CacheDir                        string             `cli:"cache-dir"`
 
 	Logger log.Logger
@@ -72,9 +72,13 @@ func (c *ImplementationsConfig) Check() error {
 		return errors.New("artifacts locator must be specified")
 	}
 	if c.ArtifactsLocator.IsTag() {
+		if c.L1ContractsRelease != "" {
+			return errors.New("l1 contracts release cannot be specified if using an artifacts tag")
+		}
+
 		c.L1ContractsRelease = c.ArtifactsLocator.Tag
-	} else {
-		c.L1ContractsRelease = "dev"
+	} else if c.L1ContractsRelease == "" {
+		return errors.New("l1 contracts release must be specified if not using an artifacts tag")
 	}
 	if !mipsVersion.IsSupported(c.MIPSVersion) {
 		return errors.New("MIPS version is not supported")
@@ -105,6 +109,9 @@ func (c *ImplementationsConfig) Check() error {
 	}
 	if c.SuperchainProxyAdmin == (common.Address{}) {
 		return errors.New("superchain proxy admin must be specified")
+	}
+	if c.Challenger == (common.Address{}) {
+		return errors.New("challenger must be specified")
 	}
 	return nil
 }
@@ -190,8 +197,12 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 		return dio, fmt.Errorf("failed to create script host: %w", err)
 	}
 
-	if dio, err = opcm.DeployImplementations(
-		l1Host,
+	opcmScripts, err := opcm.NewScripts(l1Host)
+	if err != nil {
+		return dio, fmt.Errorf("failed to load OPCM scripts: %w", err)
+	}
+
+	if dio, err = opcmScripts.DeployImplementations.Run(
 		opcm.DeployImplementationsInput{
 			WithdrawalDelaySeconds:          new(big.Int).SetUint64(cfg.WithdrawalDelaySeconds),
 			MinProposalSizeBytes:            new(big.Int).SetUint64(cfg.MinProposalSizeBytes),
@@ -204,7 +215,7 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 			ProtocolVersionsProxy:           cfg.ProtocolVersionsProxy,
 			SuperchainProxyAdmin:            cfg.SuperchainProxyAdmin,
 			UpgradeController:               cfg.UpgradeController,
-			UseInterop:                      cfg.UseInterop,
+			Challenger:                      cfg.Challenger,
 		},
 	); err != nil {
 		return dio, fmt.Errorf("error deploying implementations: %w", err)

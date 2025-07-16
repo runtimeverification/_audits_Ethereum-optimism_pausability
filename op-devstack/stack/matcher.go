@@ -51,7 +51,11 @@ type L2CLMatcher = Matcher[L2CLNodeID, L2CLNode]
 
 type SupervisorMatcher = Matcher[SupervisorID, Supervisor]
 
-type SequencerMatcher = Matcher[SequencerID, Sequencer]
+type TestSequencerMatcher = Matcher[TestSequencerID, TestSequencer]
+
+type ConductorMatcher = Matcher[ConductorID, Conductor]
+
+type FlashblocksBuilderMatcher = Matcher[FlashblocksBuilderID, FlashblocksBuilderNode]
 
 type L2ELMatcher = Matcher[L2ELNodeID, L2ELNode]
 

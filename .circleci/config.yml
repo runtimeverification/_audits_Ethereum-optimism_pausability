@@ -137,16 +137,26 @@ commands:
 
   install-contracts-dependencies:
     description: "Install the dependencies for the smart contracts"
+    parameters:
+      solc_versions:
+        description: "The versions of solc to install"
+        type: string
+        default: "0.8.15,0.8.19,0.8.25,0.8.28"
     steps:
+      - restore_cache:
+          keys:
+            # use mise.toml to anchor on the underlying forge/svm versions
+            - svm-cache-{{ checksum "mise.toml" }}-<<parameters.solc_versions>>
       - run:
-          name: Install SVM compilers
+          name: Install solc compilers
           command: |
-            # Have to wipe out the SVM directory to avoid issues with the SVM version
-            rm -rf ~/.svm/*
-            svm install 0.8.15
-            svm install 0.8.19
-            svm install 0.8.25
-            svm install 0.8.28
+            for version in $(echo "<<parameters.solc_versions>>" | tr ',' '\n'); do
+              svm which $version || svm install $version
+            done
+      - save_cache:
+          key: svm-cache-{{ checksum "mise.toml" }}-<<parameters.solc_versions>>
+          paths:
+            - ~/.svm
       - run:
           name: Install dependencies
           command: |
@@ -228,6 +238,7 @@ commands:
             git reset --hard
             git clean -df
             just <<parameters.command>>
+            git status --porcelain
             [ -z "$(git status --porcelain)" ] || exit 1
           working_directory: packages/contracts-bedrock
           when: always
@@ -242,6 +253,10 @@ jobs:
       skip_slow_tests:
         type: boolean
         default: false
+      no_output_timeout:
+        description: Timeout for when CircleCI kills the job if there's no output
+        type: string
+        default: 10m
       notify:
         description: Whether to notify on failure
         type: boolean
@@ -268,11 +283,12 @@ jobs:
           working_directory: cannon
       - run:
           name: Cannon Go 64-bit tests
+          no_output_timeout: <<parameters.no_output_timeout>>
           command: |
-            export SKIP_SLOW_TESTS=<<parameters.skip_slow_tests>>
+            export SKIP_SLOW_TESTS="<<parameters.skip_slow_tests>>"
             TIMEOUT="10m"
-            if [ "$SKIP_SLOW_TESTS" == "false" ]; then
-              TIMEOUT="30m"
+            if [ "$SKIP_SLOW_TESTS" = "false" ]; then
+              TIMEOUT="45m"
             fi
             gotestsum --format=testname --junitfile=../tmp/test-results/cannon-64.xml --jsonfile=../tmp/testlogs/log-64.json \
             -- -timeout=$TIMEOUT -parallel=$(nproc) -coverpkg=github.com/ethereum-optimism/optimism/cannon/... -coverprofile=coverage-64.out ./...
@@ -759,7 +775,7 @@ jobs:
     circleci_ip_ranges: true
     docker:
         - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+    resource_class: 2xlarge
     parameters:
       test_flags:
         description: Additional flags to pass to the test command
@@ -847,7 +863,7 @@ jobs:
         type: string
     docker:
       - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+    resource_class: xlarge
     steps:
       - utils/checkout-with-mise
       - attach_workspace: { at: "." }
@@ -1000,6 +1016,7 @@ jobs:
           if: ${{ uses_artifacts }}
       - run:
           name: Fuzz
+          no_output_timeout: 15m
           command: |
             make fuzz
           working_directory: "<<parameters.package_name>>"
@@ -1050,9 +1067,67 @@ jobs:
         description: Environment overrides
         type: string
         default: ""
-      packages:
-        description: List of packages to test
+      rule:
+        description: Rule to run the tests
         type: string
+        default: "go-tests-short-ci"
+    machine: true
+    resource_class: <<parameters.resource_class>>
+    steps:
+      - utils/checkout-with-mise
+      - attach_workspace:
+          at: "."
+      - run:
+          name: Run all Go tests via Makefile
+          no_output_timeout: <<parameters.no_output_timeout>>
+          command: |
+            <<parameters.environment_overrides>>
+            export TEST_TIMEOUT=<<parameters.test_timeout>>
+            make <<parameters.rule>>
+      - codecov/upload:
+          disable_search: true
+          files: ./coverage.out
+      - store_test_results:
+          path: ./tmp/test-results
+      - run:
+          name: Compress test logs
+          command: tar -czf testlogs.tar.gz -C ./tmp testlogs
+          when: always
+      - store_artifacts:
+          path: testlogs.tar.gz
+          when: always
+      - when:
+          condition: "<<parameters.notify>>"
+          steps:
+            - notify-failures-on-develop:
+                mentions: "<<parameters.mentions>>"
+
+  go-tests-with-fault-proof-deps:
+    parameters:
+      notify:
+        description: Whether to notify on failure
+        type: boolean
+        default: false
+      mentions:
+        description: Slack user or group to mention when notifying of failures
+        type: string
+        default: ""
+      resource_class:
+        description: Machine resource class
+        type: string
+        default: ethereum-optimism/latitude-1-go-e2e
+      no_output_timeout:
+        description: Timeout for when CircleCI kills the job if there's no output
+        type: string
+        default: 60m
+      test_timeout:
+        description: Timeout for running tests
+        type: string
+        default: 10m
+      environment_overrides:
+        description: Environment overrides
+        type: string
+        default: ""
     machine: true
     resource_class: <<parameters.resource_class>>
     steps:
@@ -1074,36 +1149,9 @@ jobs:
           name: run tests
           no_output_timeout: <<parameters.no_output_timeout>>
           command: |
-            mkdir -p ./tmp/test-results && mkdir -p ./tmp/testlogs
-            cd op-e2e && make pre-test && cd ..
-
-            packages=(
-              <<parameters.packages>>
-            )
-            formatted_packages=""
-            for package in "${packages[@]}"; do
-              formatted_packages="$formatted_packages ./$package/..."
-            done
-
-            export ENABLE_KURTOSIS=true
-            export OP_E2E_CANNON_ENABLED="false"
-            export OP_E2E_SKIP_SLOW_TEST=true
-            export OP_E2E_USE_HTTP=true
-            export ENABLE_ANVIL=true
-            export SEPOLIA_RPC_URL="https://ci-sepolia-l1-archive.optimism.io"
-            export MAINNET_RPC_URL="https://ci-mainnet-l1-archive.optimism.io"
-            export PARALLEL=$(nproc)
-            export OP_TESTLOG_FILE_LOGGER_OUTDIR=$(realpath ./tmp/testlogs)
-
             <<parameters.environment_overrides>>
-
-            gotestsum --format=testname \
-              --junitfile=./tmp/test-results/results.xml \
-              --jsonfile=./tmp/testlogs/log.json \
-              --rerun-fails=3 \
-              --rerun-fails-max-failures=50 \
-              --packages="$formatted_packages" \
-              -- -parallel=$PARALLEL -coverprofile=coverage.out -timeout=<<parameters.test_timeout>>
+            export TEST_TIMEOUT=<<parameters.test_timeout>>
+            make go-tests-fraud-proofs-ci
       - codecov/upload:
           disable_search: true
           files: ./coverage.out
@@ -1125,7 +1173,12 @@ jobs:
   op-acceptance-tests:
     parameters:
       devnet:
-        description: The name of the devnet to run the acceptance tests against. The devnet must have a recipe defined in kurtosis-devnet/Justfile with the name <devnet>-devnet.
+        description: |
+          The name of the pre-defined kurtosis devnet to run the acceptance tests against
+          (e.g. 'simple', 'isthmus', 'interop'). Empty string uses
+          in-process testing (sysgo orchestrator). Named devnets use
+          external testing (sysext orchestrator) and must have a
+          recipe defined in kurtosis-devnet/Justfile.
         type: string
         default: ""
       gate:
@@ -1136,44 +1189,46 @@ jobs:
         description: Timeout for when CircleCI kills the job if there's no output
         type: string
         default: 30m
-    machine: true
+    machine:
+      image: ubuntu-2404:current
+      docker_layer_caching: true # Since we are building docker images for components, we'll cache the layers for faster builds
     resource_class: xlarge
     steps:
       - utils/checkout-with-mise
+      - install-contracts-dependencies
+      # Attach workspace for cannon dependencies if using sysgo orchestrator (empty devnet)
+      - when:
+          condition:
+            equal: ["", << parameters.devnet >>]
+          steps:
+            - attach_workspace:
+                at: "."
       - run:
-          name: Setup Kurtosis
+          name: Setup Kurtosis (if needed)
           command: |
-            echo "Setting up Kurtosis..."
+            if [[ "<<parameters.devnet>>" != "" ]]; then
+              echo "Setting up Kurtosis for external devnet testing..."
 
-            # Print Kurtosis version
-            echo "Using Kurtosis from: $(which kurtosis || echo 'not found')"
-            kurtosis version
+              # Print Kurtosis version
+              echo "Using Kurtosis from: $(which kurtosis || echo 'not found')"
+              kurtosis version
 
-            # Start Kurtosis engine
-            echo "Starting Kurtosis engine..."
-            kurtosis engine start || true
+              # Start Kurtosis engine
+              echo "Starting Kurtosis engine..."
+              kurtosis engine start || true
 
-            # Clean old instances
-            echo "Cleaning old instances..."
-            kurtosis clean -a || true
+              # Clean old instances
+              echo "Cleaning old instances..."
+              kurtosis clean -a || true
 
-            # Check engine status
-            kurtosis engine status || true
+              # Check engine status
+              kurtosis engine status || true
 
-            echo "Kurtosis setup complete"
-      # Start our devnet
-      - run:
-          name: Start devnet (<<parameters.devnet>>)
-          working_directory: kurtosis-devnet
-          command: |
-            echo "Starting <<parameters.devnet>> devnet..."
-            just <<parameters.devnet>>-devnet
-
-            echo "<<parameters.devnet>> devnet started successfully"
-
-            # Print devnet info for debugging
-            kurtosis enclave inspect <<parameters.devnet>>-devnet || true
-      # Notify us of a devnet failure
+              echo "Kurtosis setup complete"
+            else
+              echo "Using in-process testing (sysgo orchestrator) - no Kurtosis setup needed"
+            fi
+      # Notify us of a setup failure
       - when:
           condition: on_fail
           steps:
@@ -1194,6 +1249,11 @@ jobs:
           name: Download Go dependencies
           working_directory: op-acceptance-tests
           command: go mod download
+      # Prepare the test environment
+      - run:
+          name: Prepare test environment (compile tests and cache build results)
+          working_directory: op-acceptance-tests
+          command: go test -v -c -o /dev/null $(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./tests/...)
       # Run the acceptance tests (if the devnet is running)
       - run:
           name: Run acceptance tests (gate=<<parameters.gate>>)
@@ -1204,12 +1264,6 @@ jobs:
             GO111MODULE: "on"
             GOGC: "0"
           command: |
-            # Check if the devnet is running before attempting to run tests
-            if ! kurtosis enclave ls | grep -q "<<parameters.devnet>>-devnet"; then
-              echo "Devnet <<parameters.devnet>>-devnet is not running. Skipping tests."
-              exit 1
-            fi
-
             # Run the tests
             just acceptance-test "<<parameters.devnet>>" "<<parameters.gate>>"
       - run:
@@ -1254,22 +1308,25 @@ jobs:
           steps:
             - store_artifacts:
                 path: ./op-acceptance-tests/logs
-      # Before we have a more sturdy log dump solution, we'll simply use the kurtosis-specific dump command
-      # to store all service logs as job artifacts
+      # Dump kurtosis logs if external devnet was used
       - run:
-          name: Dump kurtosis logs
+          name: Dump kurtosis logs (if external devnet was used)
           when: on_fail
           command: |
-            # Dump logs & specs
-            kurtosis dump ./.kurtosis-dump
+            if [[ "<<parameters.devnet>>" != "" ]]; then
+              # Dump logs & specs
+              kurtosis dump ./.kurtosis-dump
 
-            # Remove spec.json files
-            rm -rf ./.kurtosis-dump/enclaves/**/*.json
+              # Remove spec.json files
+              rm -rf ./.kurtosis-dump/enclaves/**/*.json
 
-            # Remove all unnecessary logs
-            rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-api--*
-            rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-logs-collector--*
-            rm -rf ./.kurtosis-dump/enclaves/*/task-*
+              # Remove all unnecessary logs
+              rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-api--*
+              rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-logs-collector--*
+              rm -rf ./.kurtosis-dump/enclaves/*/task-*
+            else
+              echo "In-process testing was used - no kurtosis logs to dump"
+            fi
       - when:
           condition: always
           steps:
@@ -1328,6 +1385,8 @@ jobs:
           paths:
             - "op-program/bin/prestate*"
             - "op-program/bin/meta*"
+            - "op-program/bin/op-program"
+            - "op-program/bin/op-program-client"
             - "cannon/bin"
 
   cannon-prestate:
@@ -1361,26 +1420,38 @@ jobs:
           command: |
             # Use the actual hash for tags (hash can be found by reading releases.json)
             PRESTATE_MT64_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-mt64.json)
+            PRESTATE_MT64NEXT_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-mt64Next.json)
             PRESTATE_INTEROP_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-interop.json)
+            PRESTATE_INTEROP_NEXT_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-interopNext.json)
 
             BRANCH_NAME=$(echo "<< pipeline.git.branch >>" | tr '/' '-')
-            echo "Publishing ${PRESTATE_MT64_HASH}, ${PRESTATE_INTEROP_HASH} as ${BRANCH_NAME}"
+            echo "Publishing ${PRESTATE_MT64_HASH}, ${PRESTATE_MT64NEXT_HASH}, ${PRESTATE_INTEROP_HASH}, ${PRESTATE_INTEROP_NEXT_HASH} as ${BRANCH_NAME}"
             if [[ "" != "<< pipeline.git.branch >>" ]]
             then
               # Upload the git commit info for each prestate since this won't be recorded in releases.json
               (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_MT64_HASH}") | gsutil cp - "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-mt64.bin.gz.txt"
+              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_MT64NEXT_HASH}") | gsutil cp - "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-mt64Next.bin.gz.txt"
               (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_INTEROP_HASH}") | gsutil cp - "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-interop.bin.gz.txt"
+              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_INTEROP_NEXT_HASH}") | gsutil cp - "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-interopNext.bin.gz.txt"
 
 
               # Use the branch name for branches to provide a consistent URL
               PRESTATE_MT64_HASH="${BRANCH_NAME}-mt64"
+              PRESTATE_MT64NEXT_HASH="${BRANCH_NAME}-mt64Next"
               PRESTATE_INTEROP_HASH="${BRANCH_NAME}-interop"
+              PRESTATE_INTEROP_NEXT_HASH="${BRANCH_NAME}-interopNext"
             fi
             gsutil cp ./op-program/bin/prestate-mt64.bin.gz \
               "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_MT64_HASH}.bin.gz"
 
+            gsutil cp ./op-program/bin/prestate-mt64Next.bin.gz \
+              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_MT64NEXT_HASH}.bin.gz"
+
             gsutil cp ./op-program/bin/prestate-interop.bin.gz \
               "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_INTEROP_HASH}.bin.gz"
+
+            gsutil cp ./op-program/bin/prestate-interopNext.bin.gz \
+              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_INTEROP_NEXT_HASH}.bin.gz"
       - notify-failures-on-develop:
           mentions: "@proofs-team"
 
@@ -1471,28 +1542,11 @@ jobs:
     resource_class: xlarge
     steps:
       - utils/checkout-with-mise
-
-      - run:
-          name: Install Build Dependencies
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y build-essential cmake ninja-build python3 curl git clang lld libc++-dev libc++abi-dev
-
-      - run:
-           name: Install LLVM Objdump via Mise
-           command: |
-             CC=clang CXX=clang++ mise install llvm-objdump@20.1.0
-             mise use -g llvm-objdump@20.1.0
-
-      - run:
-          name: Install vm-compat via Mise
-          command: |
-            mise use -g ubi:ChainSafe/vm-compat@1.1.0
-
+      - setup_remote_docker
       - run:
           name: Run Analyzer
           command: |
-            make analyze-op-program-client
+            make run-vm-compat
           working_directory: op-program
 
   op-program-compat:
@@ -1600,7 +1654,8 @@ jobs:
       - image: <<pipeline.parameters.default_docker_image>>
     resource_class: large
     steps:
-      - setup_remote_docker
+      - setup_remote_docker:
+          docker_layer_caching: true
       - gcp-cli/install
       - gcp-oidc-authenticate:
           gcp_cred_config_file_path: /tmp/gcp_cred_config.json
@@ -1689,7 +1744,9 @@ jobs:
       - utils/checkout-with-mise
       - run:
           name: Collect devnet metrics for op-acceptance-tests
-          command: ./devnet-sdk/scripts/metrics-collect-authorship.sh op-acceptance-tests/tests > .metrics--authorship--op-acceptance-tests
+          command: |
+            ./devnet-sdk/scripts/metrics-collect-authorship.sh op-acceptance-tests/tests > .metrics--authorship--op-acceptance-tests
+            echo "Wrote file .metrics--authorship--op-acceptance-tests"
       - gcp-cli/install
       - gcp-oidc-authenticate:
           gcp_cred_config_file_path: /tmp/gcp_cred_config.json
@@ -1697,8 +1754,38 @@ jobs:
       - run:
           name: Store artifact in Bucket
           command: |
-            gsutil cp .metrics--authorship--op-acceptance-tests gs://oplabs-tools-data-public-metrics/metrics-authorship/metrics
-            gsutil cp .metrics--authorship--op-acceptance-tests gs://oplabs-tools-data-public-metrics/metrics-authorship/metrics-$CIRCLE_SHA1
+            CURRENT_DATE=$(date '+%Y-%m-%d')
+            FOLDER_NAME="dt=$CURRENT_DATE"
+
+            # Upload to the date-partitioned folder structure
+            gsutil cp .metrics--authorship--op-acceptance-tests gs://oplabs-tools-data-public-metrics/metrics-authorship/$FOLDER_NAME/metrics-$CIRCLE_SHA1.csv
+
+  generate-flaky-report:
+    machine: true
+    resource_class: medium
+    steps:
+      - utils/checkout-with-mise
+      - run:
+          name: Generate flaky acceptance tests report
+          command: |
+            # Create reports directory
+            mkdir -p ./op-acceptance-tests/reports
+
+            # Make the script executable
+            chmod +x ./op-acceptance-tests/scripts/generate-flaky-tests-report.sh
+
+            # Run the script
+            ./op-acceptance-tests/scripts/generate-flaky-tests-report.sh \
+              --branch "${CIRCLE_BRANCH:-develop}" \
+              --org "${CIRCLE_PROJECT_USERNAME}" \
+              --repo "${CIRCLE_PROJECT_REPONAME}" \
+              --token "${CIRCLE_API_TOKEN}" \
+              --output-dir "./op-acceptance-tests/reports"
+
+      # Store the flaky test reports
+      - store_artifacts:
+          path: ./op-acceptance-tests/reports
+          destination: flaky-test-reports
 
 
 workflows:
@@ -1838,42 +1925,32 @@ workflows:
           context:
             - circleci-repo-readonly-authenticated-github-token
       - go-tests:
-          environment_overrides: |
-            export PARALLEL=24
-          packages: |
-            op-alt-da
-            op-batcher
-            op-chain-ops
-            op-node
-            op-proposer
-            op-challenger
-            op-faucet
-            op-dispute-mon
-            op-conductor
-            op-program
-            op-service
-            op-supervisor
-            op-test-sequencer
-            op-deployer
-            op-fetcher
-            op-validator
-            op-e2e/system
-            op-e2e/e2eutils
-            op-e2e/opgeth
-            op-e2e/interop
-            op-e2e/actions
-            op-e2e/faultproofs
-            packages/contracts-bedrock/scripts/checks
-            op-dripper
-            devnet-sdk
-            op-acceptance-tests
-            kurtosis-devnet
-            op-devstack
+          name: go-tests-short
+          no_output_timeout: 19m
+          test_timeout: 20m
           requires:
             - contracts-bedrock-build
             - cannon-prestate-quick
           context:
             - circleci-repo-readonly-authenticated-github-token
+          filters:
+            branches:
+              ignore: develop  # Run on all branches EXCEPT develop (PR branches only)
+      - go-tests:
+          name: go-tests-full
+          rule: "go-tests-ci"  # Run full test suite instead of short
+          no_output_timeout: 89m  # Longer timeout for full tests
+          test_timeout: 90m
+          notify: true
+          filters:
+            branches:
+              only: develop  # Only runs on develop branch (post-merge)
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate-quick
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
       - analyze-op-program-client:
           context:
             - circleci-repo-readonly-authenticated-github-token
@@ -1893,7 +1970,7 @@ workflows:
             - op-program-docker-build
             - op-supervisor-docker-build
             - op-test-sequencer-docker-build
-            - go-tests
+            - go-tests-short
             - sanitize-op-program
           context:
             - circleci-repo-readonly-authenticated-github-tokens
@@ -1906,6 +1983,7 @@ workflows:
               docker_name:
                 - op-node
                 - op-batcher
+                - op-faucet
                 - op-program
                 - op-proposer
                 - op-challenger
@@ -1916,6 +1994,7 @@ workflows:
                 - op-test-sequencer
                 - cannon
                 - op-dripper
+                - op-interop-mon
           context:
             - circleci-repo-readonly-authenticated-github-token
       - cannon-prestate-quick:
@@ -1984,6 +2063,7 @@ workflows:
               docker_name:
                 - op-node
                 - op-batcher
+                - op-faucet
                 - op-proposer
                 - op-challenger
                 - op-dispute-mon
@@ -1995,6 +2075,7 @@ workflows:
                 - op-deployer
                 - cannon
                 - op-dripper
+                - op-interop-mon
           name: <<matrix.docker_name>>-docker-release
           docker_tags: <<pipeline.git.revision>>
           platforms: "linux/amd64,linux/arm64"
@@ -2016,6 +2097,7 @@ workflows:
               op_component:
                 - op-node
                 - op-batcher
+                - op-faucet
                 - op-proposer
                 - op-challenger
                 - op-dispute-mon
@@ -2027,10 +2109,12 @@ workflows:
                 - op-deployer
                 - cannon
                 - op-dripper
+                - op-interop-mon
           name: <<matrix.op_component>>-cross-platform
           requires:
             - op-node-docker-release
             - op-batcher-docker-release
+            - op-faucet-docker-release
             - op-proposer-docker-release
             - op-challenger-docker-release
             - op-dispute-mon-docker-release
@@ -2041,6 +2125,7 @@ workflows:
             - op-test-sequencer-docker-release
             - cannon-docker-release
             - op-dripper-docker-release
+            - op-interop-mon-docker-release
           context:
             - circleci-repo-readonly-authenticated-github-token
       - cannon-prestate:
@@ -2111,18 +2196,13 @@ workflows:
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
-      - go-tests:
+      - go-tests-with-fault-proof-deps:
           name: op-e2e-cannon-tests
           notify: true
           mentions: "@proofs-team"
-          no_output_timeout: 60m
-          test_timeout: 90m
+          no_output_timeout: 90m
+          test_timeout: 120m
           resource_class: ethereum-optimism/latitude-fps-1
-          environment_overrides: |
-            export OP_E2E_CANNON_ENABLED="true"
-            export PARALLEL=24
-          packages: |
-            op-e2e/faultproofs
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
@@ -2137,10 +2217,6 @@ workflows:
           requires:
             - cannon-prestate
             - op-e2e-cannon-tests
-          filters:
-            branches:
-              only:
-                - develop
 
   develop-kontrol-tests:
     when:
@@ -2172,6 +2248,7 @@ workflows:
           requires:
             - contracts-bedrock-build
           skip_slow_tests: false
+          no_output_timeout: 30m
           notify: true
           context:
             - slack
@@ -2190,6 +2267,7 @@ workflows:
               docker_name:
                 - op-node
                 - op-batcher
+                - op-faucet
                 - op-program
                 - op-proposer
                 - op-challenger
@@ -2199,6 +2277,7 @@ workflows:
                 - op-test-sequencer
                 - cannon
                 - op-dripper
+                - op-interop-mon
           name: <<matrix.docker_name>>-docker-publish
           docker_tags: <<pipeline.git.revision>>,<<pipeline.git.branch>>
           platforms: "linux/amd64,linux/arm64"
@@ -2213,6 +2292,7 @@ workflows:
               op_component:
                 - op-node
                 - op-batcher
+                - op-faucet
                 - op-program
                 - op-proposer
                 - op-challenger
@@ -2222,6 +2302,7 @@ workflows:
                 - op-test-sequencer
                 - cannon
                 - op-dripper
+                - op-interop-mon
           name: <<matrix.op_component>>-cross-platform
           requires:
             - <<matrix.op_component>>-docker-publish
@@ -2262,6 +2343,25 @@ workflows:
           - equal: [true, <<pipeline.parameters.acceptance_tests_dispatch>>]
           - equal: ["api",<< pipeline.trigger_source >>]
     jobs:
+      - contracts-bedrock-build:  # needed for sysgo tests
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - cannon-prestate-quick:  # needed for sysgo tests
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      # IN-PROCESS (base)
+      - op-acceptance-tests:
+          # Acceptance Testing params
+          name: memory-base
+          gate: base
+          # CircleCI params
+          no_output_timeout: 10m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - discord
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate-quick
       # KURTOSIS (Simple)
       - op-acceptance-tests:
           # Acceptance Testing params
@@ -2269,7 +2369,7 @@ workflows:
           devnet: simple
           gate: base
           # CircleCI params
-          no_output_timeout: 60m
+          no_output_timeout: 30m
           context:
             - circleci-repo-readonly-authenticated-github-token
             - discord
@@ -2280,7 +2380,7 @@ workflows:
           devnet: isthmus
           gate: isthmus
           # CircleCI params
-          no_output_timeout: 60m
+          no_output_timeout: 30m
           context:
             - circleci-repo-readonly-authenticated-github-token
             - discord
@@ -2291,10 +2391,16 @@ workflows:
           devnet: interop
           gate: interop
           # CircleCI params
-          no_output_timeout: 60m
+          no_output_timeout: 30m
           context:
             - circleci-repo-readonly-authenticated-github-token
             - discord
+      # Generate flaky test report
+      - generate-flaky-report:
+          name: generate-flaky-tests-report
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-api-token
 
   # Acceptance tests (pre-merge to develop)
   acceptance-tests-pr:
@@ -2302,16 +2408,64 @@ workflows:
       not:
         equal: [<< pipeline.git.branch >>, "develop"]
     jobs:
+      - contracts-bedrock-build:  # needed for sysgo tests
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - cannon-prestate-quick:  # needed for sysgo tests
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      # IN-PROCESS (base)
+      - op-acceptance-tests:
+          # Acceptance Testing params
+          name: memory-base
+          gate: base
+          # CircleCI params
+          no_output_timeout: 10m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - discord
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate-quick
+      # KURTOSIS (Simple)
+      - op-acceptance-tests:
+          # Acceptance Testing params
+          name: kurtosis-simple
+          devnet: simple
+          gate: base
+          # CircleCI params
+          no_output_timeout: 30m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - discord
+      # KURTOSIS (Isthmus)
+      - op-acceptance-tests:
+          # Acceptance Testing params
+          name: kurtosis-isthmus
+          devnet: isthmus
+          gate: isthmus
+          # CircleCI params
+          no_output_timeout: 30m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - discord
+      # KURTOSIS (Interop)
       - op-acceptance-tests:
           # Acceptance Testing params
           name: kurtosis-interop
           devnet: interop
           gate: interop
           # CircleCI params
-          no_output_timeout: 10m
+          no_output_timeout: 30m
           context:
             - circleci-repo-readonly-authenticated-github-token
             - discord
+      # Generate flaky test report
+      - generate-flaky-report:
+          name: generate-flaky-tests-report
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-api-token
 
   close-issue-workflow:
     when:

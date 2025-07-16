@@ -18,22 +18,31 @@ type Minimal struct {
 	ControlPlane stack.ControlPlane
 
 	L1Network *dsl.L1Network
+	L1EL      *dsl.L1ELNode
 
 	L2Chain   *dsl.L2Network
 	L2Batcher *dsl.L2Batcher
 	L2EL      *dsl.L2ELNode
 	L2CL      *dsl.L2CLNode
 
+	TestSequencer *dsl.TestSequencer
+
 	Wallet *dsl.HDWallet
 
-	Faucet *dsl.Faucet
-	Funder *dsl.Funder
+	FaucetL1 *dsl.Faucet
+	FaucetL2 *dsl.Faucet
+	FunderL1 *dsl.Funder
+	FunderL2 *dsl.Funder
 }
 
 func (m *Minimal) L2Networks() []*dsl.L2Network {
 	return []*dsl.L2Network{
 		m.L2Chain,
 	}
+}
+
+func (m *Minimal) StandardBridge() *dsl.StandardBridge {
+	return dsl.NewStandardBridge(m.T, m.L2Chain, nil, m.L1EL)
 }
 
 func WithMinimal() stack.CommonOption {
@@ -45,19 +54,32 @@ func NewMinimal(t devtest.T) *Minimal {
 	orch := Orchestrator()
 	orch.Hydrate(system)
 
+	return minimalFromSystem(t, system, orch)
+}
+
+func minimalFromSystem(t devtest.T, system stack.ExtensibleSystem, orch stack.Orchestrator) *Minimal {
+	t.Gate().Equal(len(system.TestSequencers()), 1, "expected exactly one test sequencer")
+
+	l1Net := system.L1Network(match.FirstL1Network)
 	l2 := system.L2Network(match.Assume(t, match.L2ChainA))
+	sequencerCL := l2.L2CLNode(match.Assume(t, match.WithSequencerActive(t.Ctx())))
+	sequencerEL := l2.L2ELNode(match.Assume(t, match.EngineFor(sequencerCL)))
 	out := &Minimal{
-		Log:          t.Logger(),
-		T:            t,
-		ControlPlane: orch.ControlPlane(),
-		L1Network:    dsl.NewL1Network(system.L1Network(match.FirstL1Network)),
-		L2Chain:      dsl.NewL2Network(l2),
-		L2Batcher:    dsl.NewL2Batcher(l2.L2Batcher(match.Assume(t, match.FirstL2Batcher))),
-		L2EL:         dsl.NewL2ELNode(l2.L2ELNode(match.Assume(t, match.FirstL2EL))),
-		L2CL:         dsl.NewL2CLNode(l2.L2CLNode(match.Assume(t, match.FirstL2CL)), orch.ControlPlane()),
-		Wallet:       dsl.NewHDWallet(t, devkeys.TestMnemonic, 30),
-		Faucet:       dsl.NewFaucet(l2.Faucet(match.Assume(t, match.FirstFaucet))),
+		Log:           t.Logger(),
+		T:             t,
+		ControlPlane:  orch.ControlPlane(),
+		L1Network:     dsl.NewL1Network(system.L1Network(match.FirstL1Network)),
+		L1EL:          dsl.NewL1ELNode(l1Net.L1ELNode(match.Assume(t, match.FirstL1EL))),
+		L2Chain:       dsl.NewL2Network(l2, orch.ControlPlane()),
+		L2Batcher:     dsl.NewL2Batcher(l2.L2Batcher(match.Assume(t, match.FirstL2Batcher))),
+		L2EL:          dsl.NewL2ELNode(sequencerEL, orch.ControlPlane()),
+		L2CL:          dsl.NewL2CLNode(sequencerCL, orch.ControlPlane()),
+		TestSequencer: dsl.NewTestSequencer(system.TestSequencer(match.Assume(t, match.FirstTestSequencer))),
+		Wallet:        dsl.NewHDWallet(t, devkeys.TestMnemonic, 30),
+		FaucetL2:      dsl.NewFaucet(l2.Faucet(match.Assume(t, match.FirstFaucet))),
 	}
-	out.Funder = dsl.NewFunder(out.Wallet, out.Faucet, out.L2EL)
+	out.FaucetL1 = dsl.NewFaucet(out.L1Network.Escape().Faucet(match.Assume(t, match.FirstFaucet)))
+	out.FunderL1 = dsl.NewFunder(out.Wallet, out.FaucetL1, out.L1EL)
+	out.FunderL2 = dsl.NewFunder(out.Wallet, out.FaucetL2, out.L2EL)
 	return out
 }

@@ -14,8 +14,8 @@ import { Config } from "scripts/libraries/Config.sol";
 import { StateDiff } from "scripts/libraries/StateDiff.sol";
 import { ChainAssertions } from "scripts/deploy/ChainAssertions.sol";
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
-import { DeploySuperchain2 } from "scripts/deploy/DeploySuperchain2.s.sol";
-import { DeployImplementations2 } from "scripts/deploy/DeployImplementations2.s.sol";
+import { DeploySuperchain } from "scripts/deploy/DeploySuperchain.s.sol";
+import { DeployImplementations } from "scripts/deploy/DeployImplementations.s.sol";
 import { DeployAltDA } from "scripts/deploy/DeployAltDA.s.sol";
 import { StandardConstants } from "scripts/deploy/StandardConstants.sol";
 
@@ -35,6 +35,7 @@ import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.so
 import { IMIPS } from "interfaces/cannon/IMIPS.sol";
 import { IPreimageOracle } from "interfaces/cannon/IPreimageOracle.sol";
 import { IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
+import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.sol";
 
 /// @title Deploy
 /// @notice Script used to deploy a bedrock system. The entire system is deployed within the `run` function.
@@ -209,22 +210,23 @@ contract Deploy is Deployer {
     ///         2. The ProtocolVersions contract
     function deploySuperchain() public {
         console.log("Setting up Superchain");
-
-        // Deploy the deployment script and populate the struct of the run function's inputs.
-        DeploySuperchain2 ds2 = new DeploySuperchain2();
-        DeploySuperchain2.Input memory dsi = DeploySuperchain2.Input({
-            guardian: cfg.superchainConfigGuardian(),
-            protocolVersionsOwner: cfg.finalSystemOwner(),
-            superchainProxyAdminOwner: cfg.finalSystemOwner(),
-            paused: false,
-            recommendedProtocolVersion: bytes32(cfg.recommendedProtocolVersion()),
-            requiredProtocolVersion: bytes32(cfg.requiredProtocolVersion())
-        });
+        DeploySuperchain ds = new DeploySuperchain();
 
         // Run the deployment script.
-        DeploySuperchain2.Output memory dso = ds2.run(dsi);
+        DeploySuperchain.Output memory dso = ds.run(
+            DeploySuperchain.Input({
+                guardian: cfg.superchainConfigGuardian(),
+                // TODO: when DeployAuthSystem is done, finalSystemOwner should be replaced with the Foundation Upgrades
+                // Safe
+                protocolVersionsOwner: cfg.finalSystemOwner(),
+                superchainProxyAdminOwner: cfg.finalSystemOwner(),
+                paused: false,
+                recommendedProtocolVersion: bytes32(cfg.recommendedProtocolVersion()),
+                requiredProtocolVersion: bytes32(cfg.requiredProtocolVersion())
+            })
+        );
 
-        // Save the deployment artifacts.
+        // Store the artifacts
         artifacts.save("SuperchainProxyAdmin", address(dso.superchainProxyAdmin));
         artifacts.save("SuperchainConfigProxy", address(dso.superchainConfigProxy));
         artifacts.save("SuperchainConfigImpl", address(dso.superchainConfigImpl));
@@ -248,36 +250,39 @@ contract Deploy is Deployer {
     /// @notice Deploy all of the implementations
     /// @param _isInterop Whether to use interop
     function deployImplementations(bool _isInterop) public {
+        // TODO _isInterop is no longer being used in DeployImplementations, this might no longer be necessary
         require(_isInterop == cfg.useInterop(), "Deploy: Interop setting mismatch.");
 
         console.log("Deploying implementations");
 
-        ISuperchainConfig superchainConfig = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
-        IProxyAdmin superchainProxyAdmin = IProxyAdmin(EIP1967Helper.getAdmin(address(superchainConfig)));
+        DeployImplementations di = new DeployImplementations();
 
-        DeployImplementations2 di2 = new DeployImplementations2();
-        DeployImplementations2.Input memory dii = DeployImplementations2.Input({
-            withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
-            minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
-            challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),
-            proofMaturityDelaySeconds: cfg.proofMaturityDelaySeconds(),
-            disputeGameFinalityDelaySeconds: cfg.disputeGameFinalityDelaySeconds(),
-            mipsVersion: StandardConstants.MIPS_VERSION,
-            l1ContractsRelease: "dev",
-            superchainConfigProxy: superchainConfig,
-            protocolVersionsProxy: IProtocolVersions(artifacts.mustGetAddress("ProtocolVersionsProxy")),
-            superchainProxyAdmin: superchainProxyAdmin,
-            upgradeController: superchainProxyAdmin.owner()
-        });
+        ISuperchainConfig superchainConfigProxy = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
+        IProxyAdmin superchainProxyAdmin = IProxyAdmin(EIP1967Helper.getAdmin(address(superchainConfigProxy)));
 
-        DeployImplementations2.Output memory dio = di2.run(dii);
+        DeployImplementations.Output memory dio = di.run(
+            DeployImplementations.Input({
+                withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
+                minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
+                challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),
+                proofMaturityDelaySeconds: cfg.proofMaturityDelaySeconds(),
+                disputeGameFinalityDelaySeconds: cfg.disputeGameFinalityDelaySeconds(),
+                mipsVersion: StandardConstants.MIPS_VERSION,
+                l1ContractsRelease: "dev",
+                protocolVersionsProxy: IProtocolVersions(artifacts.mustGetAddress("ProtocolVersionsProxy")),
+                superchainConfigProxy: superchainConfigProxy,
+                superchainProxyAdmin: superchainProxyAdmin,
+                upgradeController: superchainProxyAdmin.owner(),
+                challenger: cfg.l2OutputOracleChallenger()
+            })
+        );
 
         // Save the implementation addresses which are needed outside of this function or script.
         // When called in a fork test, this will overwrite the existing implementations.
-        artifacts.save("PreimageOracle", address(dio.preimageOracleSingleton));
         artifacts.save("MipsSingleton", address(dio.mipsSingleton));
         artifacts.save("OPContractsManager", address(dio.opcm));
         artifacts.save("DelayedWETHImpl", address(dio.delayedWETHImpl));
+        artifacts.save("PreimageOracle", address(dio.preimageOracleSingleton));
 
         // Get a contract set from the implementation addresses which were just deployed.
         Types.ContractSet memory impls = Types.ContractSet({
@@ -297,7 +302,7 @@ contract Deploy is Deployer {
             SuperchainConfig: address(dio.superchainConfigImpl)
         });
 
-        ChainAssertions.checkL1CrossDomainMessenger({ _contracts: impls, _vm: vm, _isProxy: false });
+        ChainAssertions.checkL1CrossDomainMessenger(IL1CrossDomainMessenger(impls.L1CrossDomainMessenger), vm, false);
         ChainAssertions.checkL1StandardBridge({ _contracts: impls, _isProxy: false });
         ChainAssertions.checkL1ERC721Bridge({ _contracts: impls, _isProxy: false });
         ChainAssertions.checkOptimismPortal2({ _contracts: impls, _cfg: cfg, _isProxy: false });

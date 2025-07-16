@@ -143,3 +143,12 @@ and returns a typed output that the test then may use.
 - Orchestrators are configured in the `TestMain`, with generic presets, such that the different backends can support the preset or not.
 - There are no "chains": the word "chain" is reserved for the protocol typing of the onchain / state-transition related logic. Instead, there are "networks", which include the offchain resources and attached services of a chain.
 - Do not abbreviate "client" to "cl", to avoid confusion with "consensus-layer".
+
+## Environment Variables
+
+The following environment variables can be used to configure devstack:
+
+- `DEVSTACK_ORCHESTRATOR`: Configures the preferred orchestrator kind (see Orchestrator interface section above).
+- `DEVSTACK_KEYS_SALT`: Seeds the keys generated with `NewHDWallet`. This is useful for "isolating" test runs, and might be needed to reproduce CI and/or acceptance test runs. It can be any string, including the empty one to use the "usual" devkeys.
+- `DEVNET_ENV_URL`: Used when `DEVSTACK_ORCHESTRATOR=sysext` to specify the network descriptor URL.
+- `DEVNET_EXPECT_PRECONDITIONS_MET`: This can be set of force test failures when their pre-conditions are not met, which would otherwise result in them being skipped. This is helpful in particular for runs that do intend to run specific tests (as opposed to whatever is available). `op-acceptor` does set that variable, for example.

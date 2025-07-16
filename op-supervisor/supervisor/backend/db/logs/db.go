@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/db/entrydb"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/reads"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
@@ -133,6 +134,12 @@ func (db *DB) updateEntryCountMetric() {
 	db.m.RecordDBEntryCount("log", db.store.Size())
 }
 
+func (db *DB) IsEmpty() bool {
+	db.rwLock.RLock()
+	defer db.rwLock.RUnlock()
+	return db.lastEntryContext.nextEntryIndex == 0
+}
+
 func (db *DB) IteratorStartingAt(sealedNum uint64, logsSince uint32) (Iterator, error) {
 	db.rwLock.RLock()
 	defer db.rwLock.RUnlock()
@@ -170,8 +177,8 @@ func (db *DB) FindSealedBlock(number uint64) (seal types.BlockSeal, err error) {
 	}, nil
 }
 
-// StartingBlock returns the first block seal in the DB, if any.
-func (db *DB) StartingBlock() (seal types.BlockSeal, err error) {
+// FirstSealedBlock returns the first block seal in the DB, if any.
+func (db *DB) FirstSealedBlock() (seal types.BlockSeal, err error) {
 	db.rwLock.RLock()
 	defer db.rwLock.RUnlock()
 	iter := db.newIterator(0)
@@ -184,7 +191,7 @@ func (db *DB) StartingBlock() (seal types.BlockSeal, err error) {
 		Hash:      h,
 		Number:    n,
 		Timestamp: t,
-	}, err
+	}, nil
 }
 
 // OpenBlock returns the Executing Messages for the block at the given number.
@@ -193,14 +200,16 @@ func (db *DB) OpenBlock(blockNum uint64) (ref eth.BlockRef, logCount uint32, exe
 	db.rwLock.RLock()
 	defer db.rwLock.RUnlock()
 
+	// Note: newIteratorAt below handles the not-at-genesis interop start case.
+	// But here we explicitly handle blockNum 0 to avoid a block number underflow.
 	if blockNum == 0 {
-		seal, err := db.StartingBlock()
+		seal, err := db.FirstSealedBlock()
 		if err != nil {
 			retErr = err
 			return
 		}
 		if seal.Number != 0 {
-			db.log.Warn("The first block is not block 0", "block", seal.Number)
+			return eth.BlockRef{}, 0, nil, fmt.Errorf("looked for block 0 but got %s: %w", seal, types.ErrSkipped)
 		}
 		ref = eth.BlockRef{
 			Hash:       seal.Hash,
@@ -578,15 +587,41 @@ func (db *DB) AddLog(logHash common.Hash, parentBlock eth.BlockID, logIdx uint32
 	return db.flush()
 }
 
-// Rewind the database to remove any blocks after headBlockNum
+// Clear clears the DB such that there is no data left.
+// An invalidator is required as argument, to force users to invalidate any current open reads.
+func (db *DB) Clear(inv reads.Invalidator) error {
+	release, invalidateErr := inv.TryInvalidate(reads.InvalidationRules{
+		reads.DerivedInvalidation{Timestamp: 0},
+	})
+	if invalidateErr != nil {
+		return invalidateErr
+	}
+	defer release()
+	defer db.updateEntryCountMetric()
+	if truncateErr := db.store.Truncate(-1); truncateErr != nil {
+		return fmt.Errorf("failed to empty DB: %w", truncateErr)
+	}
+	db.lastEntryContext = logContext{}
+	return nil
+}
+
+// Rewind the database to remove any blocks after newHead.
 // The block at newHead.Number itself is not removed.
-func (db *DB) Rewind(newHead eth.BlockID) error {
+// If the newHead is before the start of the DB, then this empties the DB.
+func (db *DB) Rewind(inv reads.Invalidator, newHead eth.BlockID) error {
 	db.rwLock.Lock()
 	defer db.rwLock.Unlock()
+	defer db.updateEntryCountMetric()
 	// Even if the last fully-processed block matches headBlockNum,
 	// we might still have trailing log events to get rid of.
 	iter, err := db.newIteratorAt(newHead.Number, 0)
 	if err != nil {
+		if errors.Is(err, types.ErrPreviousToFirst) || errors.Is(err, types.ErrSkipped) {
+			if err := db.Clear(inv); err != nil {
+				return fmt.Errorf("failed to clear logs DB, upon rewinding to log block %s before first block: %w", newHead, err)
+			}
+			return nil
+		}
 		return err
 	}
 	if hash, num, ok := iter.SealedBlock(); !ok {
@@ -594,6 +629,15 @@ func (db *DB) Rewind(newHead eth.BlockID) error {
 	} else if hash != newHead.Hash {
 		return fmt.Errorf("cannot rewind to %s, have %s: %w", newHead, eth.BlockID{Hash: hash, Number: num}, types.ErrConflict)
 	}
+	t, ok := iter.SealedTimestamp()
+	if !ok {
+		panic("expected timestamp in block seal")
+	}
+	release, err := inv.TryInvalidate(reads.DerivedInvalidation{Timestamp: t})
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Truncate to contain idx entries. The Truncate func keeps the given index as last index.
 	if err := db.store.Truncate(iter.NextIndex() - 1); err != nil {
 		return fmt.Errorf("failed to truncate to block %s: %w", newHead, err)

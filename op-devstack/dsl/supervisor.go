@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/retry"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/status"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
 type Supervisor struct {
@@ -80,12 +81,23 @@ func (s *Supervisor) AwaitMinL1(minL1 uint64) {
 	s.require.NoError(err, "Expected sync status not found")
 }
 
+func (s *Supervisor) AwaitMinCrossSafeTimestamp(timestamp uint64) {
+	ctx, cancel := context.WithTimeout(s.ctx, DefaultTimeout)
+	defer cancel()
+	err := wait.For(ctx, 1*time.Second, func() (bool, error) {
+		return s.FetchSyncStatus().SafeTimestamp >= timestamp, nil
+	})
+	s.require.NoError(err, "Expected sync status not found")
+}
+
 func (s *Supervisor) FetchSyncStatus() eth.SupervisorSyncStatus {
 	s.log.Debug("Fetching supervisor sync status")
 	ctx, cancel := context.WithTimeout(s.ctx, DefaultTimeout)
 	defer cancel()
-	syncStatus, err := retry.Do[eth.SupervisorSyncStatus](ctx, 2, retry.Fixed(500*time.Millisecond), func() (eth.SupervisorSyncStatus, error) {
-		syncStatus, err := s.inner.QueryAPI().SyncStatus(s.ctx)
+	syncStatus, err := retry.Do(ctx, 2, retry.Fixed(500*time.Millisecond), func() (eth.SupervisorSyncStatus, error) {
+		ctx, cancel := context.WithTimeout(s.ctx, 300*time.Millisecond)
+		defer cancel()
+		syncStatus, err := s.inner.QueryAPI().SyncStatus(ctx)
 		if errors.Is(err, status.ErrStatusTrackerNotReady) {
 			s.log.Debug("Sync status not ready from supervisor")
 		}
@@ -101,6 +113,11 @@ func (s *Supervisor) FetchSyncStatus() eth.SupervisorSyncStatus {
 
 func (s *Supervisor) SafeBlockID(chainID eth.ChainID) eth.BlockID {
 	return s.L2HeadBlockID(chainID, types.CrossSafe)
+}
+
+// ChainSyncStatus satisfies that the supervisor can provide sync status per chain
+func (s *Supervisor) ChainSyncStatus(chainID eth.ChainID, lvl types.SafetyLevel) eth.BlockID {
+	return s.L2HeadBlockID(chainID, lvl)
 }
 
 // L2HeadBlockID fetches supervisor sync status and returns block id with given safety level
@@ -126,8 +143,8 @@ func (s *Supervisor) L2HeadBlockID(chainID eth.ChainID, lvl types.SafetyLevel) e
 	return blockID
 }
 
-// AdvancedL2Head checks the supervisor view of L2CL chain head with given safety level advanced more than delta block number
-func (s *Supervisor) AdvancedL2Head(chainID eth.ChainID, delta uint64, lvl types.SafetyLevel, attempts int) {
+// WaitForL2HeadToAdvance checks the supervisor view of L2CL chain head with given safety level advanced more than delta block number
+func (s *Supervisor) WaitForL2HeadToAdvance(chainID eth.ChainID, delta uint64, lvl types.SafetyLevel, attempts int) {
 	chInitial := s.L2HeadBlockID(chainID, lvl)
 	target := chInitial.Number + delta
 	err := retry.Do0(s.ctx, attempts, &retry.FixedStrategy{Dur: 2 * time.Second},
@@ -144,13 +161,47 @@ func (s *Supervisor) AdvancedL2Head(chainID eth.ChainID, delta uint64, lvl types
 	s.require.NoError(err)
 }
 
-func (s *Supervisor) AdvancedUnsafeHead(chainID eth.ChainID, delta uint64) {
+func (s *Supervisor) WaitForL2HeadToAdvanceTo(chainID eth.ChainID, lvl types.SafetyLevel, blockID eth.BlockID) {
+	ctx, cancel := context.WithCancelCause(s.ctx)
+	defer cancel(nil)
+	err := retry.Do0(ctx, 5*60, &retry.FixedStrategy{Dur: 1 * time.Second}, func() error {
+		chStatus := s.L2HeadBlockID(chainID, lvl)
+		s.log.Info("Supervisor view",
+			"chain", chainID, "label", lvl, "current", chStatus.Number, "target", blockID.Number)
+		if chStatus.Number < blockID.Number {
+			return fmt.Errorf("expected %s head to advance to blockID: %v", lvl, blockID)
+		} else if chStatus.Number == blockID.Number && chStatus.Hash != blockID.Hash {
+			err := fmt.Errorf("supervisor %s head with blockID %v for chainID %s does not match target blockID: %v", lvl, chStatus, chainID, blockID)
+			cancel(err)
+			return err
+		}
+		return nil
+	})
+
+	// If we got a context.Canceled error, check if there's a more descriptive cause
+	if err != nil && errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+			// Log the original cause for better debugging
+			err = fmt.Errorf("supervisor wait failed: %w (original cause: %w)", err, cause)
+		}
+	}
+
+	s.require.NoError(err)
+}
+
+func (s *Supervisor) WaitForUnsafeHeadToAdvance(chainID eth.ChainID, delta uint64) {
 	attempts := int(delta + 3) // intentionally allow few more attempts for avoid flaking
-	s.AdvancedL2Head(chainID, delta, types.LocalUnsafe, attempts)
+	s.WaitForL2HeadToAdvance(chainID, delta, types.LocalUnsafe, attempts)
 }
 
 func (s *Supervisor) AdvancedSafeHead(chainID eth.ChainID, delta uint64, attempts int) {
-	s.AdvancedL2Head(chainID, delta, types.CrossSafe, attempts)
+	s.WaitForL2HeadToAdvance(chainID, delta, types.CrossSafe, attempts)
+}
+
+func (s *Supervisor) FetchSuperRootAtTimestamp(timestamp uint64) eth.SuperRootResponse {
+	response, err := s.inner.QueryAPI().SuperRootAtTimestamp(s.ctx, hexutil.Uint64(timestamp))
+	s.require.NoError(err, "Unable to fetch super root at timestamp")
+	return response
 }
 
 func (s *Supervisor) Start() {

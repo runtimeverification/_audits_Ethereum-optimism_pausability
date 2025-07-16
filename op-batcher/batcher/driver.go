@@ -424,7 +424,7 @@ func (l *BatchSubmitter) syncAndPrune(syncStatus *eth.SyncStatus) *inclusiveBloc
 	defer l.channelMgrMutex.Unlock()
 
 	// Decide appropriate actions
-	syncActions, outOfSync := computeSyncActions(*syncStatus, l.prevCurrentL1, l.channelMgr.blocks, l.channelMgr.channelQueue, l.Log, l.Config.PreferLocalSafeL2)
+	syncActions, outOfSync := computeSyncActions(*syncStatus, l.prevCurrentL1, l.channelMgr.blocks, l.channelMgr.channelQueue, l.Log)
 
 	if outOfSync {
 		// If the sequencer is out of sync
@@ -463,9 +463,6 @@ func (l *BatchSubmitter) publishingLoop(ctx context.Context, wg *sync.WaitGroup,
 	txQueue := txmgr.NewQueue[txRef](ctx, l.Txmgr, l.Config.MaxPendingTransactions)
 
 	for range publishSignal {
-		if !l.checkTxpool(txQueue, receiptsCh) {
-			continue
-		}
 		l.publishStateToL1(ctx, txQueue, receiptsCh, daGroup)
 	}
 

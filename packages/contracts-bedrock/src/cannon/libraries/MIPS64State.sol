@@ -13,9 +13,10 @@ library MIPS64State {
     }
 
     struct Features {
-        bool supportNoopSysEventFd2;
+        bool supportMinimalSysEventFd2;
         bool supportDclzDclo;
         bool supportNoopMprotect;
+        bool supportWorkingSysGetRandom;
     }
 
     function assertExitedIsValid(uint32 _exited) internal pure {
@@ -26,9 +27,12 @@ library MIPS64State {
 
     function featuresForVersion(uint256 _version) internal pure returns (Features memory features_) {
         if (_version >= 7) {
-            features_.supportNoopSysEventFd2 = true;
+            features_.supportMinimalSysEventFd2 = true;
             features_.supportDclzDclo = true;
             features_.supportNoopMprotect = true;
+        }
+        if (_version >= 8) {
+            features_.supportWorkingSysGetRandom = true;
         }
     }
 }

@@ -11,8 +11,8 @@ import (
 	gethevent "github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/event"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/superevents"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
@@ -22,13 +22,14 @@ type mockSyncControl struct {
 	anchorPointFn       func(ctx context.Context) (types.DerivedBlockRefPair, error)
 	provideL1Fn         func(ctx context.Context, ref eth.BlockRef) error
 	resetFn             func(ctx context.Context, unsafe, safe, finalized eth.BlockID) error
+	resetPreInteropFn   func(ctx context.Context) error
 	updateCrossSafeFn   func(ctx context.Context, derived, source eth.BlockID) error
 	updateCrossUnsafeFn func(ctx context.Context, derived eth.BlockID) error
 	updateFinalizedFn   func(ctx context.Context, id eth.BlockID) error
-	pullEventFn         func(ctx context.Context) (*types.ManagedEvent, error)
-	blockRefByNumFn     func(ctx context.Context, number uint64) (eth.BlockRef, error)
+	pullEventFn         func(ctx context.Context) (*types.IndexingEvent, error)
+	l2BlockRefByNumFn   func(ctx context.Context, number uint64) (eth.L2BlockRef, error)
 
-	subscribeEvents gethevent.FeedOf[*types.ManagedEvent]
+	subscribeEvents gethevent.FeedOf[*types.IndexingEvent]
 }
 
 func (m *mockSyncControl) InvalidateBlock(ctx context.Context, seal types.BlockSeal) error {
@@ -56,14 +57,21 @@ func (m *mockSyncControl) Reset(ctx context.Context, lUnsafe, xUnsafe, lSafe, xS
 	return nil
 }
 
-func (m *mockSyncControl) PullEvent(ctx context.Context) (*types.ManagedEvent, error) {
+func (m *mockSyncControl) ResetPreInterop(ctx context.Context) error {
+	if m.resetPreInteropFn != nil {
+		return m.resetPreInteropFn(ctx)
+	}
+	return nil
+}
+
+func (m *mockSyncControl) PullEvent(ctx context.Context) (*types.IndexingEvent, error) {
 	if m.pullEventFn != nil {
 		return m.pullEventFn(ctx)
 	}
 	return nil, nil
 }
 
-func (m *mockSyncControl) SubscribeEvents(ctx context.Context, ch chan *types.ManagedEvent) (ethereum.Subscription, error) {
+func (m *mockSyncControl) SubscribeEvents(ctx context.Context, ch chan *types.IndexingEvent) (ethereum.Subscription, error) {
 	return m.subscribeEvents.Subscribe(ch), nil
 }
 
@@ -88,11 +96,11 @@ func (m *mockSyncControl) UpdateFinalized(ctx context.Context, id eth.BlockID) e
 	return nil
 }
 
-func (m *mockSyncControl) BlockRefByNumber(ctx context.Context, number uint64) (eth.BlockRef, error) {
-	if m.blockRefByNumFn != nil {
-		return m.blockRefByNumFn(ctx, number)
+func (m *mockSyncControl) L2BlockRefByNumber(ctx context.Context, number uint64) (eth.L2BlockRef, error) {
+	if m.l2BlockRefByNumFn != nil {
+		return m.l2BlockRefByNumFn(ctx, number)
 	}
-	return eth.BlockRef{}, nil
+	return eth.L2BlockRef{}, nil
 }
 
 func (m *mockSyncControl) String() string {
@@ -116,7 +124,7 @@ type mockBackend struct {
 	isLocalUnsafeFn   func(ctx context.Context, chainID eth.ChainID, blockID eth.BlockID) error
 }
 
-func (m *mockBackend) AnchorPoint(ctx context.Context, chainID eth.ChainID) (types.DerivedBlockSealPair, error) {
+func (m *mockBackend) ActivationBlock(ctx context.Context, chainID eth.ChainID) (types.DerivedBlockSealPair, error) {
 	if m.anchorPointFn != nil {
 		return m.anchorPointFn(ctx, chainID)
 	}
@@ -193,32 +201,21 @@ var _ backend = (*mockBackend)(nil)
 func sampleDepSet(t *testing.T) depset.DependencySet {
 	depSet, err := depset.NewStaticConfigDependencySet(
 		map[eth.ChainID]*depset.StaticConfigDependency{
-			eth.ChainIDFromUInt64(900): {
-				ChainIndex:     900,
-				ActivationTime: 42,
-				HistoryMinTime: 100,
-			},
-			eth.ChainIDFromUInt64(901): {
-				ChainIndex:     901,
-				ActivationTime: 30,
-				HistoryMinTime: 20,
-			},
+			eth.ChainIDFromUInt64(900): {},
+			eth.ChainIDFromUInt64(901): {},
 		})
 	require.NoError(t, err)
 	return depSet
 }
 
 type eventMonitor struct {
-	anchorCalled             int
 	localDerived             int
 	receivedLocalUnsafe      int
 	localDerivedOriginUpdate int
 }
 
-func (m *eventMonitor) OnEvent(ev event.Event) bool {
+func (m *eventMonitor) OnEvent(ctx context.Context, ev event.Event) bool {
 	switch ev.(type) {
-	case superevents.AnchorEvent:
-		m.anchorCalled += 1
 	case superevents.LocalDerivedEvent:
 		m.localDerived += 1
 	case superevents.LocalUnsafeReceivedEvent:

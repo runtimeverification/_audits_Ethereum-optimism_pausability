@@ -44,6 +44,7 @@ func (recipe *InteropDevRecipe) Build(addrs devkeys.Addresses) (*WorldConfig, er
 	}
 
 	superchainOps := devkeys.SuperchainOperatorKeys(l1Cfg.ChainID)
+	chainOps := devkeys.ChainOperatorKeys(l1Cfg.ChainID)
 
 	superchainDeployer, err := addrs.Address(superchainOps(devkeys.SuperchainDeployerKey))
 	if err != nil {
@@ -61,13 +62,19 @@ func (recipe *InteropDevRecipe) Build(addrs devkeys.Addresses) (*WorldConfig, er
 	if err != nil {
 		return nil, err
 	}
+	challenger, err := addrs.Address(chainOps(devkeys.ChallengerRole))
+	if err != nil {
+		return nil, err
+	}
 	l1Cfg.Prefund[superchainDeployer] = Ether(10_000_000)
 	l1Cfg.Prefund[superchainProxyAdmin] = Ether(10_000_000)
 	l1Cfg.Prefund[superchainConfigGuardian] = Ether(10_000_000)
+	l1Cfg.Prefund[challenger] = Ether(10_000_000)
 
 	superchainCfg := &SuperchainConfig{
 		ProxyAdminOwner:       superchainProxyAdmin,
 		ProtocolVersionsOwner: superchainProtocolVersionsOwner,
+		Challenger:            challenger,
 		Deployer:              superchainDeployer,
 		Implementations: OPCMImplementationsConfig{
 			L1ContractsRelease: "dev",
@@ -79,7 +86,6 @@ func (recipe *InteropDevRecipe) Build(addrs devkeys.Addresses) (*WorldConfig, er
 				DisputeGameFinalityDelaySeconds: big.NewInt(6),
 				MipsVersion:                     big.NewInt(int64(versions.GetExperimentalVersion())),
 			},
-			UseInterop: true,
 		},
 		SuperchainL1DeployConfig: genesis.SuperchainL1DeployConfig{
 			RequiredProtocolVersion:    params.OPStackSupport,
@@ -262,8 +268,6 @@ func (r *InteropDevL2Recipe) build(l1ChainID uint64, addrs devkeys.Addresses) (*
 				L2GenesisJovianTimeOffset:   nil,
 				L1CancunTimeOffset:          new(hexutil.Uint64),
 				L1PragueTimeOffset:          new(hexutil.Uint64),
-				// Don't deploy interop L2 contracts if interop hard fork isn't active at genesis
-				UseInterop: r.InteropOffset == 0,
 			},
 			L2CoreDeployConfig: genesis.L2CoreDeployConfig{
 				L1ChainID:                 l1ChainID,
