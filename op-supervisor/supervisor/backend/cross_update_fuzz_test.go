@@ -313,7 +313,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			newBlock := randomChain.chainBlocks[chainA][localSafeHead.Derived.Number]
 			newSource := types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chainA, block: newBlock}])
 			newLocalSafe := types.DerivedBlockSealPair{
-				Derived: types.BlockSealFromRef(*newBlock),
+				Derived: types.BlockSealFromRef(newBlock.BlockRef()),
 				Source:  newSource,
 			}
 
@@ -362,7 +362,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			}
 			newBlock.Hash = hashDerived
 			newLocalSafe := types.DerivedBlockSealPair{
-				Derived: types.BlockSealFromRef(*newBlock),
+				Derived: types.BlockSealFromRef(newBlock.BlockRef()),
 				Source:  newSource,
 			}
 
@@ -443,12 +443,12 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 				nextSafeBlockSource := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: nextSafeBlock}]
 				if preLocalSafeHead.Source.Number < nextSafeBlockSource.Number {
 					derived = types.DerivedBlockRefPair{
-						Derived: *randomChain.chainBlocks[chainA][preLocalSafeHead.Derived.Number],
+						Derived: randomChain.chainBlocks[chainA][preLocalSafeHead.Derived.Number].BlockRef(),
 						Source:  randomChain.l1Source[preLocalSafeHead.Source.Number+1],
 					}
 				} else {
 					derived = types.DerivedBlockRefPair{
-						Derived: *nextSafeBlock,
+						Derived: nextSafeBlock.BlockRef(),
 						Source:  nextSafeBlockSource,
 					}
 				}
@@ -520,7 +520,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 					t.Skip("Local safe to update is the same as next safe block, skipping")
 				}
 				derived = types.DerivedBlockRefPair{
-					Derived: *nextSafeBlock,
+					Derived: nextSafeBlock.BlockRef(),
 					Source:  nextSafeBlockSource,
 				}
 			} else {
@@ -596,7 +596,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 			source := randomChain.l1SourceMap[ChainBlock{chain: chainA, block: block}]
 
 			invalidated := types.DerivedBlockRefPair{
-				Derived: *block,
+				Derived: block.BlockRef(),
 				Source:  source,
 			}
 			b.chainDBs.InvalidateLocalSafe(chainA, invalidated)
@@ -673,7 +673,8 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 			newHash := testutils.RandomHash(randomChain.randomGenerator)
 
-			newLocalUnsafe := eth.BlockRef{
+			// TODO: Add L1Origin and SequenceNumber fields?
+			newLocalUnsafe := eth.L2BlockRef{
 				Hash:       newHash,
 				Number:     target,
 				ParentHash: randomChain.chainBlocks[chainA][target-1].Hash,
@@ -682,7 +683,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 
 			t.Logf("Chain A block %d: %s\t Timestamp:%d", target, newLocalUnsafe.Hash.Hex(), newLocalUnsafe.Time)
 
-			srcChainA.ExpectBlockRefByNumber(target, newLocalUnsafe, nil)
+			srcChainA.ExpectL2BlockRefByNumber(target, newLocalUnsafe, nil)
 			srcChainA.ExpectFetchReceipts(newLocalUnsafe.Hash, nil, nil)
 
 			ex.Enqueue(event.AnnotatedEvent{
@@ -1031,7 +1032,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 		b.emitter.Emit(superevents.AnchorEvent{
 			ChainID: chain,
 			Anchor: types.DerivedBlockRefPair{
-				Derived: *block,
+				Derived: block.BlockRef(),
 				Source:  randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}],
 			},
 		})
@@ -1058,7 +1059,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				crossSafe := superevents.LocalDerivedEvent{
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
-						Derived: *previous,
+						Derived: previous.BlockRef(),
 						Source:  randomChain.l1Source[j],
 					},
 					NodeID: "test-node",
@@ -1068,7 +1069,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 			crossSafe := superevents.LocalDerivedEvent{
 				ChainID: chain,
 				Derived: types.DerivedBlockRefPair{
-					Derived: *block,
+					Derived: block.BlockRef(),
 					Source:  source,
 				},
 				NodeID: "test-node",
@@ -1110,7 +1111,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					localSafe := superevents.LocalDerivedEvent{
 						ChainID: chain,
 						Derived: types.DerivedBlockRefPair{
-							Derived: *previous,
+							Derived: previous.BlockRef(),
 							Source:  randomChain.l1Source[j],
 						},
 						NodeID: "test-node",
@@ -1127,7 +1128,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				localSafe := superevents.LocalDerivedEvent{
 					ChainID: chain,
 					Derived: types.DerivedBlockRefPair{
-						Derived: *block,
+						Derived: block.BlockRef(),
 						Source:  randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}],
 					},
 					NodeID: "test-node",
@@ -1143,7 +1144,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 			}
 		}
 		localUnsafe, _ := b.chainDBs.LocalUnsafe(chain)
-		crossUnsafe := types.BlockSealFromRef(*randomChain.chainBlocks[chain][chainHeads.crossUnsafe])
+		crossUnsafe := types.BlockSealFromRef(randomChain.chainBlocks[chain][chainHeads.crossUnsafe].BlockRef())
 		if crossUnsafe.Number > localUnsafe.Number {
 			crossUnsafe = localUnsafe
 		}
