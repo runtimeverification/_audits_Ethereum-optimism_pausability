@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"math/rand"
 	"testing"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	types2 "github.com/ethereum/go-ethereum/core/types"
 	params2 "github.com/ethereum/go-ethereum/params"
-	"github.com/stretchr/testify/mock"
 
 	"github.com/ethereum-optimism/optimism/op-node/params"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -18,8 +16,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/processors"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
-
-const testChainIDOffset = 900
 
 func ExecMsgForLog(chain eth.ChainID, block eth.BlockRef, log *types2.Log) *types2.Log {
 	msg := types.Message{
@@ -541,30 +537,6 @@ func InsertCycle(t *testing.T, r *rand.Rand, res *RandomChain, candidate *ChainB
 	insertExecutingMessageAt(0, res, cycleEnd, cycleStart, initiatingLog)
 	res.dependencies[*cycleEnd] = append(res.dependencies[*cycleEnd], cycleStart)
 	t.Logf("Added cyclic dependency: (%s, %2d) -> (%s, %2d)", cycleEnd.chain, cycleEnd.block.Number, cycleStart.chain, cycleStart.block.Number)
-}
-
-type MockProcessorSource struct {
-	mock.Mock
-}
-
-var _ processors.Source = (*MockProcessorSource)(nil)
-
-func (m *MockProcessorSource) FetchReceipts(ctx context.Context, blockHash common.Hash) (types2.Receipts, error) {
-	out := m.Mock.Called(blockHash)
-	return out.Get(0).(types2.Receipts), out.Error(1)
-}
-
-func (m *MockProcessorSource) ExpectFetchReceipts(hash common.Hash, receipts types2.Receipts, err error) {
-	m.Mock.On("FetchReceipts", hash).Return(receipts, err)
-}
-
-func (m *MockProcessorSource) BlockRefByNumber(ctx context.Context, num uint64) (eth.BlockRef, error) {
-	out := m.Mock.Called(num)
-	return out.Get(0).(eth.BlockRef), out.Error(1)
-}
-
-func (m *MockProcessorSource) ExpectBlockRefByNumber(num uint64, ref eth.BlockRef, err error) {
-	m.Mock.On("BlockRefByNumber", num).Return(ref, err)
 }
 
 func GetCrossUnsafeCandidate(rc RandomChain) (block *ChainBlock) {
