@@ -36,6 +36,8 @@ type rewinderDB interface {
 	Finalized(eth.ChainID) (types.BlockSeal, error)
 
 	LocalDerivedToSource(chain eth.ChainID, derived eth.BlockID) (source types.BlockSeal, err error)
+
+	UpdateCrossUnsafe(chain eth.ChainID, newCrossUnsafe types.BlockSeal) error
 }
 
 // Rewinder is responsible for handling the rewinding of databases to the latest common ancestor between
@@ -147,6 +149,7 @@ func (r *Rewinder) handleLocalDerivedEvent(ev superevents.LocalSafeUpdateEvent) 
 		r.log.Error("failed to rewind logs DB", "chain", ev.ChainID, "err", err)
 		return
 	}
+	r.db.UpdateCrossUnsafe(ev.ChainID, target)
 }
 
 // rewindL1ChainIfReorged rewinds the L1 chain for the given chain ID if a reorg is detected
