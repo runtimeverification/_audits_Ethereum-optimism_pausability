@@ -9,12 +9,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/log"
 
-	"github.com/ethereum-optimism/optimism/op-node/rollup/event"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	oplog "github.com/ethereum-optimism/optimism/op-service/log"
-	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
-	"github.com/ethereum-optimism/optimism/op-service/oppprof"
-	oprpc "github.com/ethereum-optimism/optimism/op-service/rpc"
+	"github.com/ethereum-optimism/optimism/op-service/event"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum-optimism/optimism/op-supervisor/config"
@@ -87,6 +83,7 @@ func FuzzUpdateCrossUnsafeSucceeds(f *testing.F) {
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.UpdateCrossUnsafeRequestEvent{},
 				EmitPriority: event.High,
 			})
@@ -157,6 +154,7 @@ func FuzzUpdateCrossUnsafeFails(f *testing.F) {
 
 			// Enqueue the UpdateCrossUnsafeRequestEvent
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.UpdateCrossUnsafeRequestEvent{},
 				EmitPriority: event.High,
 			})
@@ -199,6 +197,7 @@ func FuzzUpdateCrossSafeSucceeds(f *testing.F) {
 			preState := AssertInvariants(t, b, randomChain)
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.UpdateCrossSafeRequestEvent{},
 				EmitPriority: event.High,
 			})
@@ -267,6 +266,7 @@ func FuzzUpdateCrossSafeFails(f *testing.F) {
 			preState := AssertInvariants(t, b, randomChain)
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.UpdateCrossSafeRequestEvent{},
 				EmitPriority: event.High,
 			})
@@ -318,6 +318,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.LocalSafeUpdateEvent{
 					ChainID:      chainA,
 					NewLocalSafe: newLocalSafe,
@@ -348,7 +349,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			chainA := randomChain.chainIDs[0]
 			localSafeHead := preState.chainHeads[chainA].localSafe
 
-			// WARN: We assume the first block to be the always equal to the unsafe-chain
+			// WARN: We assume the first block to be always equal to the unsafe-chain
 			if localSafeHead.Derived.Number == 0 {
 				t.Skip()
 			}
@@ -367,6 +368,7 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.LocalSafeUpdateEvent{
 					ChainID:      chainA,
 					NewLocalSafe: newLocalSafe,
@@ -383,31 +385,11 @@ func FuzzUpdateLocalSafeInvariants(f *testing.F) {
 				}, false))
 			t.Log("LocalSafeUpdateEvent processed")
 
-			// WARN: We have to add the new local safe to the localUnsafe DB
-			// otherwise the invariant crossUnsafe <= localUnsafe might not hold
-			// if cross-safe == local-safe in the initial state
-			ex.Enqueue(event.AnnotatedEvent{
-				Event: superevents.ChainProcessEvent{
-					ChainID: chainA,
-					Target:  newLocalSafe.Derived.Number,
-				},
-				EmitPriority: event.High,
-			})
-
-			require.NoError(t, ex.DrainUntil(
-				func(ev event.Event) bool {
-					return ev == superevents.ChainProcessEvent{
-						ChainID: chainA,
-						Target:  newLocalSafe.Derived.Number,
-					}
-				}, false))
-			t.Log("ChainProcessEvent processed")
-
 			t.Log("Final State")
 			// Safety properties
 			posState := AssertInvariants(t, b, randomChain)
 			// Liveness property
-			require.Equal(t, posState.chainHeads[chainA].localUnsafe.Number, posState.chainHeads[chainA].localSafe.Derived.Number)
+			require.Equal(t, posState.chainHeads[chainA].localSafe.Derived.Number, posState.chainHeads[chainA].localUnsafe.Number+1, "Local safe head should be equal to local unsafe head + 1")
 		})
 
 		err := b.Stop(context.Background())
@@ -468,6 +450,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.LocalDerivedEvent{
 					ChainID: chainA,
 					Derived: derived,
@@ -539,6 +522,7 @@ func FuzzLocalDerivedEventInvariants(f *testing.F) {
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.LocalDerivedEvent{
 					ChainID: chainA,
 					Derived: derived,
@@ -615,6 +599,7 @@ func FuzzReplaceBlockEventInvariants(f *testing.F) {
 				Time:       uint64(time.Now().Unix()),
 			}
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.ReplaceBlockEvent{
 					ChainID: chainA,
 					Replacement: types.BlockReplacement{
@@ -687,6 +672,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 			srcChainA.ExpectFetchReceipts(newLocalUnsafe.Hash, nil, nil)
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.ChainProcessEvent{
 					ChainID: chainA,
 					Target:  target,
@@ -724,6 +710,7 @@ func FuzzChainProcessEventInvariants(f *testing.F) {
 			}
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.ChainProcessEvent{
 					ChainID: chainA,
 					Target:  target,
@@ -769,6 +756,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("LocalUnsafeUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.LocalUnsafeUpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -787,13 +775,14 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("LocalUnsafeReceivedEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
-				Event:        superevents.LocalUnsafeReceivedEvent{},
+				Ctx:          context.Background(),
+				Event:        superevents.LocalUnsafeReceivedEvent{ChainID: randomChain.chainIDs[0]},
 				EmitPriority: event.High,
 			})
 
 			require.NoError(t, ex.DrainUntil(
 				func(ev event.Event) bool {
-					return ev == superevents.LocalUnsafeReceivedEvent{}
+					return ev == superevents.LocalUnsafeReceivedEvent{ChainID: randomChain.chainIDs[0]}
 				}, false))
 			t.Log("LocalUnsafeReceivedEvent processed")
 
@@ -806,6 +795,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("CrossUnsafeUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.CrossUnsafeUpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -824,6 +814,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("CrossSafeUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.CrossSafeUpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -842,6 +833,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("FinalizedL1UpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.FinalizedL1UpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -860,6 +852,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("FinalizedL2UpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.FinalizedL2UpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -878,6 +871,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("InvalidateLocalSafeEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.InvalidateLocalSafeEvent{},
 				EmitPriority: event.High,
 			})
@@ -894,26 +888,9 @@ func FuzzEventsPreserveState(f *testing.F) {
 			AssertStateNotChange(t, randomChain, preState, posState)
 		})
 
-		t.Run("ChainRewoundEvent", func(t *testing.T) {
-			ex.Enqueue(event.AnnotatedEvent{
-				Event:        superevents.ChainRewoundEvent{},
-				EmitPriority: event.High,
-			})
-
-			require.NoError(t, ex.DrainUntil(
-				func(ev event.Event) bool {
-					return ev == superevents.ChainRewoundEvent{}
-				}, false))
-			t.Log("ChainRewoundEvent processed")
-
-			t.Log("Final State")
-			// Safety properties
-			posState := AssertInvariants(t, b, randomChain)
-			AssertStateNotChange(t, randomChain, preState, posState)
-		})
-
 		t.Run("UpdateLocalSafeFailedEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.UpdateLocalSafeFailedEvent{},
 				EmitPriority: event.High,
 			})
@@ -932,6 +909,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 		t.Run("LocalDerivedOriginUpdateEvent", func(t *testing.T) {
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.LocalDerivedOriginUpdateEvent{},
 				EmitPriority: event.High,
 			})
@@ -951,6 +929,7 @@ func FuzzEventsPreserveState(f *testing.F) {
 		t.Run("FinalizedL1RequestEvent", func(t *testing.T) {
 			// Handling this event changes the finalized database which is not part of the invariants
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx:          context.Background(),
 				Event:        superevents.FinalizedL1RequestEvent{},
 				EmitPriority: event.High,
 			})
@@ -974,30 +953,43 @@ func FuzzEventsPreserveState(f *testing.F) {
 
 }
 
-func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.GlobalSyncExec, b *SupervisorBackend) {
-	logger := testlog.Logger(t, log.LvlInfo)
-	dataDir := t.TempDir()
-	dependencies := make(map[eth.ChainID]*depset.StaticConfigDependency)
-
-	for i, chain := range randomChain.chainIDs {
-		chainint, _ := chain.Uint64()
-
-		dependencies[chain] = &depset.StaticConfigDependency{
-			ChainIndex:     types.ChainIndex(uint32(chainint)),
-			ActivationTime: uint64(42 + i),
-			HistoryMinTime: 0,
+func fuzzConfigSet(t *testing.T, randomChain RandomChain) depset.FullConfigSetMerged {
+	size := chainParams.chainCount
+	staticDepSet := make(map[eth.ChainID]*depset.StaticConfigDependency, size)
+	staticRollupCfgSet := make(map[eth.ChainID]*depset.StaticRollupConfig, size)
+	zero := uint64(0)
+	for _, chain := range randomChain.chainIDs {
+		staticDepSet[chain] = &depset.StaticConfigDependency{}
+		staticRollupCfgSet[chain] = &depset.StaticRollupConfig{
+			InteropTime: &zero,
+			BlockTime:   2,
 		}
 	}
-	depSet, err := depset.NewStaticConfigDependencySet(dependencies)
+	depSet, err := depset.NewStaticConfigDependencySet(staticDepSet)
 	require.NoError(t, err)
+	rollupCfgSet := depset.NewStaticRollupConfigSet(staticRollupCfgSet)
+	fullCfgSet, err := depset.NewFullConfigSetMerged(rollupCfgSet, depSet)
+	require.NoError(t, err)
+	return fullCfgSet
+}
 
+func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.GlobalSyncExec, b *SupervisorBackend) {
+	logger := testlog.Logger(t, log.LvlInfo)
+	m := metrics.NoopMetrics
+	dataDir := t.TempDir()
+	fullCfgSet := fuzzConfigSet(t, randomChain)
+	rollupCfgSet := fullCfgSet.RollupConfigSet.(depset.StaticRollupConfigSet)
+
+	for _, chain := range randomChain.chainIDs {
+		anchor := randomChain.chainBlocks[chain][0]
+		rollupCfgSet[chain].Genesis = depset.Genesis{
+			L1: types.BlockSealFromRef(randomChain.l1SourceMap[ChainBlock{chain: chain, block: anchor}]),
+			L2: types.BlockSealFromRef(anchor.BlockRef()),
+		}
+	}
 	cfg := &config.Config{
 		Version:               "test",
-		LogConfig:             oplog.CLIConfig{},
-		MetricsConfig:         opmetrics.CLIConfig{},
-		PprofConfig:           oppprof.CLIConfig{},
-		RPC:                   oprpc.CLIConfig{},
-		DependencySetSource:   depSet,
+		FullConfigSetSource:   fullCfgSet,
 		SynchronousProcessors: true,
 		MockRun:               false,
 		SyncSources:           &syncnode.CLISyncNodes{},
@@ -1005,9 +997,9 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 	}
 
 	ex = event.NewGlobalSynchronous(context.Background())
-	b, err = NewSupervisorBackend(context.Background(), logger, metrics.NoopMetrics, cfg, ex)
+	b, err := NewSupervisorBackend(context.Background(), logger, m, cfg, ex)
 	require.NoError(t, err)
-	t.Log("Initialized!")
+	t.Log("initialized!")
 
 	l1Src := &testutils.MockL1Source{}
 	b.AttachL1Source(l1Src)
@@ -1026,19 +1018,6 @@ func ExecutorBackendInit(t *testing.T, randomChain RandomChain) (ex *event.Globa
 
 func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, randomChain RandomChain) {
 	GenerateReceiptsFromLogs(&randomChain)
-
-	for _, chain := range randomChain.chainIDs {
-		block := randomChain.chainBlocks[chain][0]
-		b.emitter.Emit(superevents.AnchorEvent{
-			ChainID: chain,
-			Anchor: types.DerivedBlockRefPair{
-				Derived: block.BlockRef(),
-				Source:  randomChain.l1SourceMap[ChainBlock{chain: chain, block: block}],
-			},
-		})
-	}
-
-	ex.Drain()
 
 	for _, chain := range randomChain.chainIDs {
 		chainHeads := randomChain.chainHeads[chain]
@@ -1064,7 +1043,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					},
 					NodeID: "test-node",
 				}
-				b.emitter.Emit(crossSafe)
+				b.emitter.Emit(context.Background(), crossSafe)
 			}
 			crossSafe := superevents.LocalDerivedEvent{
 				ChainID: chain,
@@ -1074,7 +1053,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 				},
 				NodeID: "test-node",
 			}
-			b.emitter.Emit(crossSafe)
+			b.emitter.Emit(context.Background(), crossSafe)
 		}
 	}
 	ex.Drain()
@@ -1088,6 +1067,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 			block := randomChain.chainBlocks[chain][i]
 
 			ex.Enqueue(event.AnnotatedEvent{
+				Ctx: context.Background(),
 				Event: superevents.ChainProcessEvent{
 					ChainID: chain,
 					Target:  block.Number,
@@ -1117,6 +1097,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 						NodeID: "test-node",
 					}
 					ex.Enqueue(event.AnnotatedEvent{
+						Ctx:          context.Background(),
 						Event:        localSafe,
 						EmitPriority: event.High,
 					})
@@ -1134,6 +1115,7 @@ func ChainsInit(t *testing.T, b *SupervisorBackend, ex *event.GlobalSyncExec, ra
 					NodeID: "test-node",
 				}
 				ex.Enqueue(event.AnnotatedEvent{
+					Ctx:          context.Background(),
 					Event:        localSafe,
 					EmitPriority: event.High,
 				})
