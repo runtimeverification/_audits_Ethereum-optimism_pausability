@@ -31,6 +31,7 @@ type rewinderDB interface {
 	RewindLocalSafeSource(eth.ChainID, eth.BlockID) error
 	RewindCrossSafeSource(eth.ChainID, eth.BlockID) error
 	RewindLogs(chainID eth.ChainID, newHead types.BlockSeal) error
+	ResetCrossUnsafeIfNewerThan(chainID eth.ChainID, number uint64) error
 
 	FindSealedBlock(eth.ChainID, uint64) (types.BlockSeal, error)
 	Finalized(eth.ChainID) (types.BlockSeal, error)

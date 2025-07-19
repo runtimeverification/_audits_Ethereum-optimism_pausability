@@ -460,7 +460,7 @@ func (m *MockProcessorSource) FetchReceipts(ctx context.Context, blockHash commo
 }
 
 func (m *MockProcessorSource) ExpectFetchReceipts(hash common.Hash, receipts types2.Receipts, err error) {
-	m.Mock.On("FetchReceipts", hash).Once().Return(receipts, err)
+	m.Mock.On("FetchReceipts", hash).Return(receipts, err)
 }
 
 func (m *MockProcessorSource) L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error) {
